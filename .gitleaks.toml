@@ -1,0 +1,11 @@
+title = "VoiceOut gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Example env files use placeholder secret names/values for local dev."
+paths = [
+  '''\.env\.example$''',
+  '''\.env\.local\.example$''',
+]
