@@ -1,0 +1,23 @@
+{
+  "name": "voiceout",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "db:migrate": "pnpm --filter @voiceout/db migrate",
+    "db:gate": "pnpm --filter @voiceout/db gate",
+    "db:studio": "pnpm --filter @voiceout/db studio",
+    "https": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/https-tunnel.ps1"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "prettier": "^3.4.2"
+  }
+}

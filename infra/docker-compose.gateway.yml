@@ -1,0 +1,7 @@
+# Included in docker-compose.yml. Kept so older commands still work:
+# docker compose -f infra/docker-compose.yml -f infra/docker-compose.gateway.yml up
+# Public port is 2000 → internal 2005. Do not publish :80.
+services:
+  gateway:
+    ports:
+      - "2000:2005"

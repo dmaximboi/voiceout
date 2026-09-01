@@ -1,0 +1,96 @@
+import type { PostCard } from '@voiceout/shared';
+
+function user(
+  id: string,
+  handle: string,
+  displayName: string,
+): PostCard['author'] {
+  return {
+    id,
+    handle,
+    displayName,
+    bio: null,
+    avatarUrl: null,
+    followerCount: 0,
+    followingCount: 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+const emptyReactions = {
+  like: 0,
+  love: 0,
+  haha: 0,
+  wow: 0,
+  sad: 0,
+  angry: 0,
+};
+
+const voice = '/samples/voice.wav';
+const clip = '/samples/clip.mp4';
+
+export const SAMPLE_POSTS: PostCard[] = [
+  {
+    id: 'sample-1',
+    author: user('sample-u1', 'amayawaves', 'Amaya Waves'),
+    caption: 'Morning walk thoughts. The city sounds different when you actually listen.',
+    durationMs: 8000,
+    durationCap: 60,
+    audioUrl: voice,
+    imageUrls: ['/samples/one.png', '/samples/two.png'],
+    videoUrl: clip,
+    createdAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    reactionCounts: { ...emptyReactions, like: 24, love: 8 },
+    myReaction: null,
+    commentCount: 5,
+    bookmarkCount: 2,
+    repostCount: 1,
+    voiceCount: 0,
+    bookmarkedByMe: false,
+    repostedByMe: false,
+    voicedByMe: false,
+    status: 'published',
+  },
+  {
+    id: 'sample-2',
+    author: user('sample-u2', 'jordanvox', 'Jordan Vox'),
+    caption: 'Voice notes beat long texts. You hear the pause, the laugh, the real thing.',
+    durationMs: 8000,
+    durationCap: 120,
+    audioUrl: voice,
+    imageUrls: ['/samples/two.png'],
+    videoUrl: clip,
+    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    reactionCounts: { ...emptyReactions, haha: 11, like: 41, wow: 3 },
+    myReaction: null,
+    commentCount: 12,
+    bookmarkCount: 4,
+    repostCount: 3,
+    voiceCount: 1,
+    bookmarkedByMe: false,
+    repostedByMe: false,
+    voicedByMe: false,
+    status: 'published',
+  },
+  {
+    id: 'sample-3',
+    author: user('sample-u3', 'nilespeak', 'Nile Speak'),
+    caption: 'Tiny story from the market today. You had to be there. This is as close as I can get you.',
+    durationMs: 8000,
+    durationCap: 120,
+    audioUrl: voice,
+    imageUrls: ['/samples/one.png', '/samples/two.png'],
+    videoUrl: clip,
+    createdAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    reactionCounts: { ...emptyReactions, love: 19, like: 7 },
+    myReaction: null,
+    commentCount: 3,
+    bookmarkCount: 0,
+    repostCount: 0,
+    voiceCount: 0,
+    bookmarkedByMe: false,
+    repostedByMe: false,
+    voicedByMe: false,
+    status: 'published',
+  },
+];

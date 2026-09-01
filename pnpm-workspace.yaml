@@ -1,0 +1,6 @@
+packages:
+  - "apps/web"
+  - "apps/api"
+  - "apps/backend"
+  - "apps/payments"
+  - "packages/*"

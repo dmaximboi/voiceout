@@ -1,0 +1,264 @@
+# Public edge: host :2000 → gateway :2005 on app_net.
+# data_net is internal (no container-to-internet). API/web/algo ports are not published.
+x-app: &app-limits
+  mem_limit: 768m
+  cpus: "1.0"
+  pids_limit: 256
+  init: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+x-data: &data-limits
+  mem_limit: 768m
+  cpus: "1.0"
+  pids_limit: 256
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+x-app-db: &app-db
+  DATABASE_URL: postgres://voiceout_app:${DATABASE_APP_PASSWORD:-voiceout_app_local}@postgres:5432/voiceout
+  REDIS_URL: redis://redis:6379
+
+networks:
+  app_net:
+    name: voiceout_app_net
+    driver: bridge
+  data_net:
+    name: voiceout_data_net
+    driver: bridge
+    internal: true
+
+services:
+  postgres:
+    <<: *data-limits
+    image: postgres:16-alpine
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: voiceout
+      POSTGRES_PASSWORD: voiceout
+      POSTGRES_DB: voiceout
+    command:
+      - postgres
+      - -c
+      - listen_addresses=*
+      - -c
+      - statement_timeout=15s
+      - -c
+      - idle_in_transaction_session_timeout=30s
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - data_net
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceout"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    <<: *data-limits
+    image: redis:7-alpine
+    mem_limit: 192m
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--protected-mode", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - data_net
+      - app_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    <<: *data-limits
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio-secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio:/data
+    networks:
+      - data_net
+      - app_net
+
+  minio-init:
+    image: minio/mc:latest
+    networks:
+      - data_net
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 minio minio-secret;
+      mc mb -p local/voiceout;
+      echo '{"CORSRules":[{"AllowedOrigins":["http://localhost:2000","http://localhost:3000"],"AllowedMethods":["GET","PUT","HEAD","POST"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag","Accept-Ranges","Content-Length","Content-Type"]}]}' > /tmp/cors.json;
+      mc cors set local/voiceout /tmp/cors.json;
+      exit 0;
+      "
+
+  migrate:
+    <<: *app-limits
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    working_dir: /repo
+    command: ["sh", "-c", "pnpm db:migrate && pnpm db:gate"]
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_OWNER_URL: postgres://voiceout:voiceout@postgres:5432/voiceout
+      DATABASE_URL: postgres://voiceout:voiceout@postgres:5432/voiceout
+      DATABASE_APP_USER: voiceout_app
+      DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:-voiceout_app_local}
+    networks:
+      - data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app-limits
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    working_dir: /repo/apps/api
+    command: ["pnpm", "start"]
+    env_file:
+      - ../.env
+    environment:
+      <<: *app-db
+      API_PORT: 4000
+      S3_ENDPOINT: http://minio:9000
+      ALGO_URL: http://algo:5000
+      WEB_ORIGIN: http://localhost:2000
+      API_ORIGIN: http://localhost:2000
+      PUBLIC_ORIGIN: http://localhost:2000
+    expose:
+      - "4000"
+    networks:
+      - app_net
+      - data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
+  backend:
+    <<: *app-limits
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    working_dir: /repo/apps/backend
+    command: ["pnpm", "start"]
+    env_file:
+      - ../.env
+    environment:
+      <<: *app-db
+      API_ORIGIN: http://api:4000
+      ALGO_URL: http://algo:5000
+    expose:
+      - "4001"
+    networks:
+      - app_net
+      - data_net
+    depends_on:
+      - api
+      - redis
+
+  payments:
+    <<: *app-limits
+    mem_limit: 256m
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    working_dir: /repo/apps/payments
+    command: ["pnpm", "start"]
+    environment:
+      PAYMENTS_PORT: 4002
+    expose:
+      - "4002"
+    networks:
+      - app_net
+
+  algo:
+    <<: *app-limits
+    build:
+      context: ../apps/algo
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      <<: *app-db
+      S3_ENDPOINT: http://minio:9000
+      TRANSCRIBE_URL_HOSTS: minio,localhost,127.0.0.1
+    expose:
+      - "5000"
+    networks:
+      - data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    <<: *app-limits
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: /vo-api
+        NEXT_PUBLIC_WEB_ORIGIN: http://localhost:2000
+    environment:
+      API_ORIGIN: http://api:4000
+    expose:
+      - "3000"
+    networks:
+      - app_net
+    depends_on:
+      - api
+
+  gateway:
+    <<: *app-limits
+    image: nginx:1.27-alpine
+    mem_limit: 128m
+    cpus: "0.50"
+    read_only: true
+    ports:
+      - "2000:2005"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+      - /var/log/nginx
+    networks:
+      - app_net
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata:
+  minio:
