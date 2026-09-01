@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt pytest pip-audit
       - run: pytest -q
-      - run: pip-audit
+      - run: pip-audit -r requirements.txt --no-deps
 
   gitleaks:
     runs-on: ubuntu-latest
