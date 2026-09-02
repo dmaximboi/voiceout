@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const API = process.env.API_ORIGIN;
-if (!API) throw new Error('API_ORIGIN is required');
+function apiOrigin() {
+  const api = process.env.API_ORIGIN?.trim();
+  if (!api) return null;
+  return api.replace(/\/$/, '');
+}
 
 type CookieOpts = NonNullable<Parameters<NextResponse['cookies']['set']>[2]>;
 
@@ -46,6 +49,13 @@ function applyCookie(res: NextResponse, raw: string) {
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   try {
+    const API = apiOrigin();
+    if (!API) {
+      return NextResponse.json(
+        { error: 'API temporarily unavailable' },
+        { status: 503, headers: { 'cache-control': 'no-store' } },
+      );
+    }
     const { path } = await ctx.params;
     if (path.some((p) => !p || p === '.' || p === '..' || p.includes('\\') || p.includes('\0'))) {
       return NextResponse.json({ error: 'Not found' }, { status: 404, headers: { 'cache-control': 'no-store' } });
