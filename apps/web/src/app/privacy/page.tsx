@@ -57,8 +57,7 @@ export default function PrivacyPage() {
       <p>
         We keep account and published media until you delete them or the operator removes the account for
         abuse. Failed uploads may be deleted automatically. Backups may last a short extra period. When you
-        delete your account we delete your user row and everything tied to it in our database, including posts,
-        comments, follows, and media files. That is irreversible.
+        delete your account, all your credentials will be lost and will never be regained. That is irreversible.
       </p>
       <h2 className="pt-2 text-lg font-semibold">Your choices</h2>
       <p>

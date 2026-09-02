@@ -18,8 +18,9 @@ const Ctx = createContext<AuthCtx | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<MeUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [fatal, setFatal] = useState<Error | null>(null);
   const epoch = useRef(0);
+  const userRef = useRef<MeUser | null>(null);
+  userRef.current = user;
 
   async function refresh() {
     const mine = ++epoch.current;
@@ -28,7 +29,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         data = await api<{ user: MeUser }>('/auth/me');
       } catch (err) {
-        if (!(err instanceof ApiError) || err.status < 500) throw err;
+        // One soft retry on transient API/proxy failures.
+        if (!(err instanceof ApiError) || (err.status < 500 && err.status !== 429)) throw err;
+        await new Promise((r) => setTimeout(r, 400));
         data = await api<{ user: MeUser }>('/auth/me');
       }
       if (mine !== epoch.current) return;
@@ -39,8 +42,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         return;
       }
+      // Keep the current session on rate-limit / proxy blips — never crash the tree.
       console.error(err);
-      setFatal(err instanceof Error ? err : new Error('Session check failed'));
+      if (!userRef.current) setUser(null);
     } finally {
       if (mine === epoch.current) setLoading(false);
     }
@@ -101,8 +105,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }),
     [user, loading],
   );
-
-  if (fatal) throw fatal;
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

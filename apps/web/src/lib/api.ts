@@ -43,7 +43,8 @@ async function readJson(res: Response): Promise<unknown> {
 }
 
 function asJsonObject(value: unknown): Record<string, unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (value && typeof value === 'object' && !Array.isArray(value))
+    return value as Record<string, unknown>;
   return {};
 }
 
@@ -56,7 +57,8 @@ export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
     method !== 'HEAD' &&
     path !== '/auth/csrf' &&
     path !== '/auth/refresh' &&
-    path !== '/notifications/read';
+    path !== '/notifications/read' &&
+    path !== '/feed/events';
   if (track) return withProcessing(() => apiInner<T>(path, init));
   return apiInner<T>(path, init);
 }
@@ -138,20 +140,31 @@ export async function uploadAvatar(file: File) {
     body: JSON.stringify({ kind: 'avatar', mime: photo.type || 'image/jpeg', bytes: photo.size }),
   });
   await uploadBytes(intent.mediaId, photo);
-  await api('/users/me/avatar', { method: 'POST', body: JSON.stringify({ mediaId: intent.mediaId }) });
+  await api('/users/me/avatar', {
+    method: 'POST',
+    body: JSON.stringify({ mediaId: intent.mediaId }),
+  });
 }
 
 export async function uploadPostImage(file: File) {
   const photo = await withProcessing(() => compressImage(file));
   const intent = await api<{ mediaId: string }>('/media/upload-url', {
     method: 'POST',
-    body: JSON.stringify({ kind: 'post_image', mime: photo.type || 'image/jpeg', bytes: photo.size }),
+    body: JSON.stringify({
+      kind: 'post_image',
+      mime: photo.type || 'image/jpeg',
+      bytes: photo.size,
+    }),
   });
   await uploadBytes(intent.mediaId, photo);
   return intent.mediaId;
 }
 
-export async function uploadAudio(kind: 'post_audio' | 'comment_audio', file: Blob, durationCap: number) {
+export async function uploadAudio(
+  kind: 'post_audio' | 'comment_audio',
+  file: Blob,
+  durationCap: number,
+) {
   const mime = file.type || 'audio/webm';
   const intent = await api<{ mediaId: string }>('/media/upload-url', {
     method: 'POST',

@@ -67,7 +67,7 @@ services:
     <<: *data-limits
     image: redis:7-alpine
     mem_limit: 192m
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--protected-mode", "no"]
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--protected-mode", "no"]
     ports:
       - "127.0.0.1:6379:6379"
     networks:
@@ -113,6 +113,7 @@ services:
 
   migrate:
     <<: *app-limits
+    restart: "no"
     build:
       context: ..
       dockerfile: infra/Dockerfile.node
@@ -150,6 +151,12 @@ services:
       PUBLIC_ORIGIN: http://localhost:2000
     expose:
       - "4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - app_net
       - data_net
@@ -178,12 +185,20 @@ services:
       ALGO_URL: http://algo:5000
     expose:
       - "4001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - app_net
       - data_net
     depends_on:
-      - api
-      - redis
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   payments:
     <<: *app-limits
@@ -197,6 +212,12 @@ services:
       PAYMENTS_PORT: 4002
     expose:
       - "4002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - app_net
 
@@ -213,6 +234,12 @@ services:
       TRANSCRIBE_URL_HOSTS: minio,localhost,127.0.0.1
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - data_net
     depends_on:
@@ -233,10 +260,17 @@ services:
       API_ORIGIN: http://api:4000
     expose:
       - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - app_net
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   gateway:
     <<: *app-limits
@@ -256,8 +290,10 @@ services:
     networks:
       - app_net
     depends_on:
-      - web
-      - api
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

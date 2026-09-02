@@ -1,9 +1,10 @@
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
-from rank import Candidate, rank_candidates
+from rank import Candidate, rank_candidates_with_reasons
 from transcribe import transcribe_payload
 from geo import infer_geo
 from lang import detect_lang
+from sentiment import classify_comment
 from trending import load_signals, load_trending, recompute_trending
 
 app = FastAPI(title="VoiceOut algo", version="1.0.0")
@@ -33,6 +34,7 @@ class RankIn(BaseModel):
 
 class RankOut(BaseModel):
     post_ids: list[str]
+    rank_reasons: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class TranscribeIn(BaseModel):
@@ -40,6 +42,11 @@ class TranscribeIn(BaseModel):
     caption: str = ""
     draft_transcript: str = ""
     download_url: str | None = None
+
+
+class ClassifyIn(BaseModel):
+    body: str = Field(default="", max_length=500)
+    sticker_id: str | None = Field(default=None, max_length=32)
 
 
 @app.get("/health")
@@ -73,7 +80,7 @@ def rank(payload: RankIn, _: None = Depends(require_token)) -> RankOut:
             completes = float(sig.get("completes") or 0)
             data["complete_listen"] = (completes / reach) if reach else 0.0
         merged.append(Candidate(**data))
-    ids = rank_candidates(
+    ids, reasons = rank_candidates_with_reasons(
         merged,
         payload.recent_captions,
         payload.avg_listen_ms,
@@ -83,7 +90,7 @@ def rank(payload: RankIn, _: None = Depends(require_token)) -> RankOut:
         payload.viewer_emotion,
         payload.viewer_region,
     )
-    return RankOut(post_ids=ids)
+    return RankOut(post_ids=ids, rank_reasons=reasons)
 
 
 class GeoIn(BaseModel):
@@ -93,6 +100,16 @@ class GeoIn(BaseModel):
 @app.post("/v1/geo")
 def geo(payload: GeoIn, _: None = Depends(require_token)) -> dict:
     return infer_geo(payload.text)
+
+
+@app.post("/v1/classify")
+def classify(payload: ClassifyIn, _: None = Depends(require_token)) -> dict:
+    result = classify_comment(payload.body, payload.sticker_id)
+    return {
+        "primary": result.primary,
+        "secondary": result.secondary,
+        "confidence": result.confidence,
+    }
 
 
 @app.post("/v1/transcribe")

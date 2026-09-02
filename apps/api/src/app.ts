@@ -13,6 +13,7 @@ import type { S3Client } from '@aws-sdk/client-s3';
 import type { Queues } from './lib/queue.js';
 import { authPlugin } from './plugins/auth.js';
 import { authRoutes } from './routes/auth.js';
+import { billingRoutes } from './routes/billing.js';
 import { userRoutes } from './routes/users.js';
 import { mediaRoutes } from './routes/media.js';
 import { postRoutes } from './routes/posts.js';
@@ -20,6 +21,7 @@ import { feedRoutes } from './routes/feed.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { socialRoutes } from './routes/social.js';
 import { adminRoutes } from './routes/admin.js';
+import { feedbackRoutes } from './routes/feedback.js';
 import './types.js';
 
 export async function buildApp(opts: {
@@ -66,17 +68,48 @@ export async function buildApp(opts: {
   await app.register(cors, {
     origin: [...new Set([opts.env.WEB_ORIGIN, opts.env.PUBLIC_ORIGIN].filter((o) => o.startsWith('http')))],
     credentials: true,
-    allowedHeaders: ['content-type', 'x-csrf-token', 'authorization', 'idempotency-key', 'x-request-id'],
+    allowedHeaders: [
+      'content-type',
+      'x-csrf-token',
+      'authorization',
+      'idempotency-key',
+      'x-request-id',
+      'x-vo-client',
+    ],
   });
   await app.register(cookie, { secret: opts.env.COOKIE_SECRET });
   await app.register(rateLimit, {
-    max: 90,
+    global: true,
+    max: opts.env.NODE_ENV === 'production' ? 180 : 400,
     timeWindow: '1 minute',
     redis: opts.redis,
     nameSpace: 'vo-rl-',
-    skipOnError: false,
-    ban: 4,
-    allowList: (req) => req.url.split('?')[0] === '/health',
+    // If Redis blips, do not turn every request into a 500.
+    skipOnError: true,
+    // No multi-strike ban — one phone + shared tunnel IP was locking people out.
+    ban: 0,
+    allowList: (req) => {
+      const path = req.url.split('?')[0] ?? '';
+      return (
+        path === '/health' ||
+        path === '/auth/csrf' ||
+        path === '/auth/me' ||
+        path === '/auth/refresh'
+      );
+    },
+    keyGenerator: (req) => {
+      const xf = String(req.headers['x-forwarded-for'] ?? '')
+        .split(',')[0]
+        ?.trim();
+      const ip = xf || req.ip || 'unknown';
+      const ua = String(req.headers['x-vo-client'] ?? req.headers['user-agent'] ?? '').slice(0, 48);
+      return `${ip}|${ua}`;
+    },
+    errorResponseBuilder: (_req, context) => ({
+      statusCode: 429,
+      error: `Rate limited. Try again in ${Math.ceil(context.ttl / 1000)}s`,
+      retryAfter: Math.ceil(context.ttl / 1000),
+    }),
   });
 
   await authPlugin(app);
@@ -103,6 +136,7 @@ export async function buildApp(opts: {
   app.get('/health', async () => ({ ok: true, service: 'api' }));
 
   await app.register(authRoutes);
+  await app.register(billingRoutes);
   await app.register(userRoutes);
   await app.register(mediaRoutes);
   await app.register(postRoutes);
@@ -110,6 +144,7 @@ export async function buildApp(opts: {
   await app.register(notificationRoutes);
   await app.register(socialRoutes);
   await app.register(adminRoutes);
+  await app.register(feedbackRoutes);
 
   return app;
 }

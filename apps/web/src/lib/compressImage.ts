@@ -16,14 +16,15 @@ function allowedMime(type: string) {
 }
 
 export async function compressImage(file: File): Promise<File> {
-  if (file.size <= UNDER && allowedMime(file.type)) return file;
+  const type = (file.type || '').split(';')[0]?.trim().toLowerCase() ?? '';
+  if (file.size <= UNDER && allowedMime(type)) return file;
   const target = targetBytes(file.size);
-  if (file.size <= target && allowedMime(file.type)) return file;
+  if (file.size <= target && allowedMime(type)) return file;
 
   const bitmap = await decode(file);
   if (!bitmap) {
-    if (file.size <= HARD_MAX && allowedMime(file.type)) return file;
-    throw new Error('Could not read that photo. Try a JPEG or PNG.');
+    if (file.size <= HARD_MAX && allowedMime(type)) return file;
+    throw new Error('Could not read that photo. Try a JPEG or PNG from your gallery.');
   }
 
   const canvas = document.createElement('canvas');

@@ -28,7 +28,7 @@ function LoginPageInner() {
   const resetToken = params.get('reset');
   const verifyToken = params.get('verify');
 
-  const [email, setEmail] = useState('');
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -42,6 +42,18 @@ function LoginPageInner() {
   useEffect(() => {
     if (params.get('error') === 'oauth') setError('Sign-in failed. Try again.');
   }, [params]);
+
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('vo_notice');
+      if (saved) {
+        sessionStorage.removeItem('vo_notice');
+        setNotice(saved);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   useEffect(() => {
     if (!verifyToken) return;
@@ -60,7 +72,7 @@ function LoginPageInner() {
     try {
       const data = await api<{ user: MeUser }>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ login, password }),
       });
       clearCsrf();
       applyUser(data.user);
@@ -77,7 +89,10 @@ function LoginPageInner() {
     setError(null);
     setBusy(true);
     try {
-      await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+      await api('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: login.trim().toLowerCase() }),
+      });
       setNotice('If that email has a password account, we sent a reset link.');
       setMode('login');
     } catch (err) {
@@ -127,10 +142,10 @@ function LoginPageInner() {
           <form onSubmit={(e) => void onSubmit(e)} className="mt-6 space-y-3">
             <input
               className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
-              placeholder="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email or handle"
+              autoComplete="username"
+              value={login}
+              onChange={(e) => setLogin(e.target.value)}
               required
             />
             <PasswordField
@@ -178,8 +193,8 @@ function LoginPageInner() {
             className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
             placeholder="Email"
             type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
             required
           />
           {error ? <p className="text-sm text-red-600">{error}</p> : null}

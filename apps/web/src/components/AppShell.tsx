@@ -21,6 +21,7 @@ import { AccountMenu } from './AccountMenu';
 import { Avatar } from './Avatar';
 import { DockBar } from './DockBar';
 import { Logo } from './Logo';
+import { useNotifications } from '@/lib/notifications';
 
 export { Avatar } from './Avatar';
 
@@ -32,12 +33,13 @@ const tabs: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/me', label: 'Your posts', icon: User },
 ];
 
-const hideFabOn = ['/record', '/login', '/register', '/privacy', '/terms'];
+const hideFabOn = ['/record', '/login', '/register', '/privacy', '/terms', '/admin', '/switch-acct'];
 const hideBottomNavOn = ['/login', '/register', '/privacy', '/terms'];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const { user, logout } = useAuth();
+  const { unreadCount } = useNotifications();
   const router = useRouter();
   const [docked, setDocked] = useState(false);
   const showMic = !hideFabOn.includes(path);
@@ -46,13 +48,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      void navigator.serviceWorker.register('/sw.js');
+      void navigator.serviceWorker.register('/sw.js').then((reg) => {
+        reg.active?.postMessage({
+          type: 'PREFETCH',
+          urls: ['/', '/login', '/register', '/record', '/settings', '/me', '/search', '/trending'],
+        });
+      });
     }
     const theme = localStorage.getItem('vo-theme');
     if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
       document.documentElement.classList.add('dark');
     }
-  }, []);
+    router.prefetch('/login');
+    router.prefetch('/register');
+    router.prefetch('/record');
+    router.prefetch('/search');
+    router.prefetch('/settings');
+    router.prefetch('/me');
+    router.prefetch('/trending');
+  }, [router]);
+
+  useEffect(() => {
+    if (user?.handle) router.prefetch(`/u/${user.handle}`);
+  }, [router, user?.handle]);
 
   useEffect(() => {
     function onScroll() {
@@ -125,12 +143,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={t.href}
                   href={href}
+                  onClick={(e) => {
+                    if (t.href === '/' && path === '/') {
+                      e.preventDefault();
+                      window.dispatchEvent(new Event('vo:refresh-feed'));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                  }}
                   className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium active:opacity-80 ${
                     active ? 'bg-accent/10 text-accent' : 'tap-hover'
                   }`}
                 >
-                  <Icon size={20} strokeWidth={2} />
+                  <span className="relative">
+                    <Icon size={20} strokeWidth={2} />
+                    {t.href === '/notifications' && unreadCount > 0 ? (
+                      <span
+                        className="unread-breathe absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-[var(--card)]"
+                        aria-hidden
+                      />
+                    ) : null}
+                  </span>
                   {t.label}
+                  {t.href === '/notifications' && unreadCount > 0 ? (
+                    <span className="sr-only">, {unreadCount} unread</span>
+                  ) : null}
                 </Link>
               );
             })}

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Fraunces } from 'next/font/google';
 import { AuthProvider } from '@/lib/auth';
 import { PlayerProvider } from '@/lib/player';
+import { NotificationsProvider } from '@/lib/notifications';
 import { AppShell } from '@/components/AppShell';
 import './globals.css';
 
@@ -40,9 +41,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={avatarFont.variable} suppressHydrationWarning>
       <body>
         <AuthProvider>
-          <PlayerProvider>
-            <AppShell>{children}</AppShell>
-          </PlayerProvider>
+          <NotificationsProvider>
+            <PlayerProvider>
+              <AppShell>{children}</AppShell>
+            </PlayerProvider>
+          </NotificationsProvider>
         </AuthProvider>
       </body>
     </html>

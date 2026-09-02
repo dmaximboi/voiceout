@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { PeopleSearch } from '@/components/PeopleSearch';
+import { SearchHistory } from '@/components/SearchHistory';
 
 export default function SearchPage() {
   const [q, setQ] = useState('');
@@ -20,7 +21,7 @@ export default function SearchPage() {
           />
         </label>
       </div>
-      <PeopleSearch query={q} />
+      {q.trim() ? <PeopleSearch query={q} /> : <SearchHistory onSelect={setQ} />}
     </div>
   );
 }

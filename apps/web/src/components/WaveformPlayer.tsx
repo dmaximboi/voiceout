@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
 import { audioPeaks } from '@/lib/audioPeaks';
+import { claimPlayback } from '@/lib/audioGate';
 import { usePlayer } from '@/lib/player';
 
 export function WaveformPlayer({
@@ -81,6 +82,7 @@ export function WaveformPlayer({
       el.pause();
       setLocalPlaying(false);
     } else {
+      claimPlayback();
       void el.play().then(() => setLocalPlaying(true)).catch(() => setLocalPlaying(false));
     }
   }

@@ -1,17 +1,29 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { FormEvent, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { api, ApiError, clearCsrf, uploadAvatar } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { formatCooldown } from '@voiceout/shared';
+import { formatCooldown, STUDIO_PRICE_LABEL } from '@voiceout/shared';
 import { Avatar } from '@/components/Avatar';
 import { LegalLinks } from '@/components/LegalLinks';
 import { PasswordField } from '@/components/PasswordField';
+import { SafetySettings } from '@/components/SafetySettings';
+import { canViewModeration } from '@/lib/safetyState';
 
 export function SettingsForm({ compact = false }: { compact?: boolean }) {
+  return (
+    <Suspense>
+      <SettingsFormInner compact={compact} />
+    </Suspense>
+  );
+}
+
+function SettingsFormInner({ compact = false }: { compact?: boolean }) {
   const { user, loading, refresh, applyUser, logout } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [displayName, setDisplayName] = useState('');
   const [handle, setHandle] = useState('');
   const [bio, setBio] = useState('');
@@ -22,11 +34,26 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
   const [passwordSaved, setPasswordSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [verifySent, setVerifySent] = useState(false);
   const [phoneLink, setPhoneLink] = useState<string | null>(null);
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [subBusy, setSubBusy] = useState(false);
+  const [subError, setSubError] = useState<string | null>(null);
+  const [subNote, setSubNote] = useState<string | null>(null);
+  const [nameCode, setNameCode] = useState('');
+  const [nameCodeSent, setNameCodeSent] = useState(false);
+  const [nameCodeBusy, setNameCodeBusy] = useState(false);
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linkCode, setLinkCode] = useState('');
+  const [linkSent, setLinkSent] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [phoneBusySave, setPhoneBusySave] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -36,17 +63,151 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
     }
   }, [user]);
 
+  useEffect(() => {
+    const studio = searchParams.get('studio');
+    if (studio === 'cancel') {
+      setSubNote('Checkout canceled.');
+      return;
+    }
+    if (studio !== 'ok') return;
+    let cancelled = false;
+    setSubNote('Confirming payment…');
+    void (async () => {
+      try {
+        const checkoutId = searchParams.get('checkout_id') ?? undefined;
+        const result = await api<{ ok: boolean; isStudio?: boolean }>(
+          '/billing/studio/confirm',
+          {
+            method: 'POST',
+            body: JSON.stringify(checkoutId ? { checkoutId } : {}),
+          },
+        );
+        if (cancelled) return;
+        await refresh();
+        setSubNote(
+          result.ok || result.isStudio
+            ? 'Payment confirmed. Voice studio is active.'
+            : 'Payment is still processing. Refresh in a moment.',
+        );
+      } catch (err) {
+        if (cancelled) return;
+        setSubNote(err instanceof Error ? err.message : 'Could not confirm payment yet. Refresh shortly.');
+        void refresh();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, refresh]);
+
+  async function startStudioCheckout() {
+    setSubBusy(true);
+    setSubError(null);
+    try {
+      const data = await api<{ checkoutUrl: string }>('/billing/studio/checkout', {
+        method: 'POST',
+        body: '{}',
+      });
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      setSubError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not start checkout');
+      setSubBusy(false);
+    }
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
     setError(null);
     try {
-      await api('/users/me', { method: 'PATCH', body: JSON.stringify({ displayName, handle, bio }) });
+      const renaming =
+        Boolean(user) && (displayName !== user!.displayName || handle !== user!.handle);
+      if (renaming && !nameCodeSent) {
+        setError('Request a verification code before changing your name or username');
+        return;
+      }
+      await api('/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          displayName,
+          handle,
+          bio,
+          ...(renaming ? { verificationCode: nameCode } : {}),
+        }),
+      });
       await refresh();
+      setNameCode('');
+      setNameCodeSent(false);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1600);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Could not save');
+    }
+  }
+
+  async function requestNameCode() {
+    setError(null);
+    setNameCodeBusy(true);
+    try {
+      await api('/users/me/name-code', {
+        method: 'POST',
+        body: JSON.stringify({ displayName, handle }),
+      });
+      setNameCodeSent(true);
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not send code');
+    } finally {
+      setNameCodeBusy(false);
+    }
+  }
+
+  async function requestEmailLink() {
+    setLinkError(null);
+    setLinkBusy(true);
+    try {
+      await api('/users/me/email/link', {
+        method: 'POST',
+        body: JSON.stringify({ email: linkEmail.trim() }),
+      });
+      setLinkSent(true);
+    } catch (err) {
+      setLinkError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not send code');
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function confirmEmailLink() {
+    setLinkError(null);
+    setLinkBusy(true);
+    try {
+      await api('/users/me/email/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ email: linkEmail.trim(), code: linkCode.trim() }),
+      });
+      await refresh();
+      setLinkSent(false);
+      setLinkCode('');
+    } catch (err) {
+      setLinkError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not confirm email');
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  async function savePhone() {
+    setError(null);
+    setPhoneBusySave(true);
+    try {
+      await api('/users/me/phone', {
+        method: 'POST',
+        body: JSON.stringify({ phone: phoneInput.trim() }),
+      });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not save phone');
+    } finally {
+      setPhoneBusySave(false);
     }
   }
 
@@ -137,7 +298,8 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
   const nameWait = Math.max(0, new Date(user.nameChangeAvailableAt).getTime() - Date.now());
   const passwordWait = Math.max(0, new Date(user.passwordChangeAvailableAt).getTime() - Date.now());
   const nameLocked = nameWait > 0;
-  const passwordLocked = passwordWait > 0;
+  const passwordLocked = passwordWait > 0 && user.hasPassword;
+  const renaming = displayName !== user.displayName || handle !== user.handle;
 
   return (
     <div className={compact ? 'px-4 py-3' : 'px-4 py-6'}>
@@ -145,10 +307,80 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
         <>
           <h1 className="text-xl font-bold">Edit profile</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Signed in as <span className="font-medium text-[var(--text)]">{user.email}</span>
+            Signed in as{' '}
+            <span className="font-medium text-[var(--text)]">
+              {user.needsRealEmail ? 'Telegram account' : user.email}
+            </span>
           </p>
         </>
       )}
+
+      {user.needsRealEmail ? (
+        <div className="mt-5 space-y-3 rounded-xl border border-amber-300 p-3">
+          <p className="text-sm font-semibold">Add your email</p>
+          <p className="text-sm text-[var(--muted)]">
+            Required to change your name. If this email already has an account, log in there instead.
+          </p>
+          <input
+            className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
+            type="email"
+            placeholder="you@gmail.com"
+            value={linkEmail}
+            onChange={(e) => setLinkEmail(e.target.value)}
+          />
+          {linkSent ? (
+            <input
+              className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="6-digit code"
+              value={linkCode}
+              onChange={(e) => setLinkCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            />
+          ) : null}
+          {linkError ? <p className="text-sm text-red-600">{linkError}</p> : null}
+          <button
+            type="button"
+            disabled={linkBusy || !linkEmail.trim() || (linkSent && linkCode.length !== 6)}
+            className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
+            onClick={() => void (linkSent ? confirmEmailLink() : requestEmailLink())}
+          >
+            {linkBusy ? 'Working…' : linkSent ? 'Confirm email' : 'Send code'}
+          </button>
+          <div className="border-t border-[var(--line)] pt-3">
+            <p className="text-sm font-medium">Phone (optional)</p>
+            <input
+              className="mt-1 w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
+              placeholder={user.phone ?? '+234…'}
+              value={phoneInput}
+              onChange={(e) => setPhoneInput(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={phoneBusySave || !phoneInput.trim()}
+              className="mt-2 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold disabled:opacity-60"
+              onClick={() => void savePhone()}
+            >
+              {phoneBusySave ? 'Saving…' : 'Save phone'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {user.hasPassword && !user.isEmailVerified && !user.needsRealEmail ? (
+        <div className="mt-5 rounded-xl border border-amber-300 p-3">
+          <p className="text-sm">Account created. Verify your email in your Gmail (or inbox) to post and rename.</p>
+          <button
+            type="button"
+            className="mt-2 text-sm font-semibold text-accent"
+            onClick={() =>
+              void api('/auth/resend-verify', { method: 'POST', body: '{}' }).then(() => setVerifySent(true))
+            }
+          >
+            {verifySent ? 'Verification email sent' : 'Resend verification email'}
+          </button>
+        </div>
+      ) : null}
 
       <div className={`flex items-center gap-4 ${compact ? '' : 'mt-6'}`}>
         <Avatar name={user.displayName} src={user.avatarUrl} size={compact ? 'sm' : 'lg'} />
@@ -191,8 +423,34 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
           <p className="text-sm text-[var(--muted)]">
             Name and username can change in {formatCooldown(nameWait)}.
           </p>
+        ) : renaming ? (
+          <div className="space-y-2 rounded-xl border border-[var(--line)] p-3">
+            <p className="text-sm text-[var(--muted)]">
+              Changing name or username needs a code sent to your email.
+            </p>
+            <button
+              type="button"
+              disabled={nameCodeBusy || user.needsRealEmail || !user.isEmailVerified}
+              className="flex min-h-11 items-center rounded-full border border-[var(--line)] px-4 text-sm font-semibold disabled:opacity-60"
+              onClick={() => void requestNameCode()}
+            >
+              {nameCodeBusy ? 'Sending…' : nameCodeSent ? 'Resend code' : 'Send verification code'}
+            </button>
+            {nameCodeSent ? (
+              <input
+                className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit code"
+                value={nameCode}
+                onChange={(e) => setNameCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              />
+            ) : null}
+          </div>
         ) : (
-          <p className="text-sm text-[var(--muted)]">Name and username can change 7 days after you create the account, then every 7 days after a change.</p>
+          <p className="text-sm text-[var(--muted)]">
+            Change your name with an email code. After a change, wait 7 days before another rename.
+          </p>
         )}
         <label className="block text-sm font-medium">
           Bio
@@ -214,8 +472,10 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
         <h2 className="text-base font-semibold">{user.hasPassword ? 'Change password' : 'Set a password'}</h2>
         {passwordLocked ? (
           <p className="text-sm text-[var(--muted)]">Password can change in {formatCooldown(passwordWait)}.</p>
+        ) : user.hasPassword ? (
+          <p className="text-sm text-[var(--muted)]">Password can change every 3 days after a change.</p>
         ) : (
-          <p className="text-sm text-[var(--muted)]">Password can change 3 days after you create the account, then every 3 days after a change.</p>
+          <p className="text-sm text-[var(--muted)]">Add a password so you can also sign in with email.</p>
         )}
         {user.hasPassword ? (
           <PasswordField
@@ -281,29 +541,75 @@ export function SettingsForm({ compact = false }: { compact?: boolean }) {
           </p>
         ) : null}
       </div>
+
       <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-        <h2 className="text-base font-semibold text-red-600">Delete account</h2>
+        <h2 className="text-base font-semibold">Subscription</h2>
         <p className="text-sm text-[var(--muted)]">
-          This signs you out and deletes your account, posts, comments, media, and related rows from our
-          database. Type DELETE to confirm.
+          {user.isStudio
+            ? 'Longer recordings (5m+) are unlocked on this account.'
+            : `Unlock 5m, 15m, and 30m recordings for ${STUDIO_PRICE_LABEL}. Trim and boost stay free.`}
         </p>
-        <input
-          className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
-          value={deleteConfirm}
-          onChange={(e) => setDeleteConfirm(e.target.value)}
-          placeholder="DELETE"
-          autoComplete="off"
-        />
-        {deleteError ? <p className="text-sm text-red-600">{deleteError}</p> : null}
+        {user.isStudio ? null : (
+          <button
+            type="button"
+            disabled={subBusy}
+            onClick={() => void startStudioCheckout()}
+            className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {subBusy ? 'Opening checkout…' : 'Subscribe'}
+          </button>
+        )}
+        {subNote ? <p className="text-sm text-[var(--muted)]">{subNote}</p> : null}
+        {subError ? <p className="text-sm text-red-600">{subError}</p> : null}
+      </div>
+
+      <div className="mt-8 border-t border-[var(--line)] pt-5">
         <button
           type="button"
-          className="flex min-h-11 items-center rounded-full border border-red-200 px-5 text-sm font-semibold text-red-600 active:bg-[var(--bg)] disabled:opacity-60"
-          disabled={deleteBusy || deleteConfirm !== 'DELETE'}
-          onClick={() => void deleteAccount()}
+          className="flex min-h-11 w-full items-center justify-between rounded-xl border border-[var(--line)] px-4 text-sm font-semibold"
+          onClick={() => setMoreOpen((v) => !v)}
+          aria-expanded={moreOpen}
         >
-          {deleteBusy ? 'Deleting' : 'Delete my account'}
+          More options
+          <span aria-hidden>{moreOpen ? '▴' : '▾'}</span>
         </button>
+        {moreOpen ? (
+          <div className="mt-2 space-y-2">
+            <SafetySettings user={user} />
+            {canViewModeration(user.role) ? (
+              <Link
+                href="/switch-acct"
+                className="mt-6 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold"
+              >
+                Switch account
+              </Link>
+            ) : null}
+            <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
+              <h2 className="text-base font-semibold text-red-600">Delete account</h2>
+              <p className="text-sm text-[var(--muted)]">
+                All your credentials will be lost and will never be regained. Type DELETE to confirm.
+              </p>
+              <input
+                className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
+                value={deleteConfirm}
+                onChange={(e) => setDeleteConfirm(e.target.value)}
+                placeholder="DELETE"
+                autoComplete="off"
+              />
+              {deleteError ? <p className="text-sm text-red-600">{deleteError}</p> : null}
+              <button
+                type="button"
+                className="flex min-h-11 items-center rounded-full border border-red-200 px-5 text-sm font-semibold text-red-600 active:bg-[var(--bg)] disabled:opacity-60"
+                disabled={deleteBusy || deleteConfirm !== 'DELETE'}
+                onClick={() => void deleteAccount()}
+              >
+                {deleteBusy ? 'Deleting' : 'Delete my account'}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
+
       <button
         type="button"
         className="mt-6 flex min-h-11 items-center rounded-full border border-red-200 px-5 text-sm font-semibold text-red-600 active:bg-[var(--bg)]"

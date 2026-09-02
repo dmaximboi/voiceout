@@ -3,6 +3,8 @@ import {
   AUDIO_MIMES,
   AVATAR_MIMES,
   DURATION_CAPS,
+  FEED_EVENT_TYPES,
+  FEED_FEEDBACK_KINDS,
   HANDLE_MAX,
   HANDLE_MIN,
   MAX_BIO_LENGTH,
@@ -38,7 +40,8 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().email().max(254).transform((e) => e.toLowerCase()),
+  /** Email or @handle */
+  login: z.string().trim().min(1).max(254),
   password: z.string().min(1).max(128),
 });
 
@@ -59,6 +62,25 @@ export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(MAX_DISPLAY_NAME_LENGTH).optional(),
   bio: z.string().trim().max(MAX_BIO_LENGTH).optional(),
   handle: handleSchema.optional(),
+  verificationCode: z.string().trim().regex(/^\d{6}$/).optional(),
+});
+
+export const linkEmailSchema = z.object({
+  email: z.string().email().max(254).transform((e) => e.toLowerCase()),
+});
+
+export const confirmEmailSchema = z.object({
+  email: z.string().email().max(254).transform((e) => e.toLowerCase()),
+  code: z.string().trim().regex(/^\d{6}$/),
+});
+
+export const confirmPhoneSchema = z.object({
+  phone: z
+    .string()
+    .trim()
+    .min(7)
+    .max(32)
+    .regex(/^\+?[0-9\s\-()]+$/),
 });
 
 export const changePasswordSchema = z
@@ -100,8 +122,36 @@ export const createCommentSchema = z
     stickerId: z
       .enum(PRESET_STICKERS.map((s) => s.id) as [string, ...string[]])
       .optional(),
+    replyToCommentId: z.string().uuid().optional(),
   })
   .refine((d) => Boolean(d.body) || Boolean(d.mediaId), { message: 'Empty reply' });
+
+export const feedFeedbackSchema = z
+  .object({
+    postId: z.string().uuid(),
+    kind: z.enum(FEED_FEEDBACK_KINDS),
+  })
+  .strict();
+
+export const feedEventSchema = z
+  .object({
+    eventType: z.enum(FEED_EVENT_TYPES),
+    postId: z.string().uuid().optional(),
+    commentId: z.string().uuid().optional(),
+    targetUserId: z.string().uuid().optional(),
+    source: z.string().trim().min(1).max(32).optional(),
+    dwellMs: z.number().int().min(0).max(2_000_000).optional(),
+  })
+  .strict()
+  .refine((event) => Boolean(event.postId || event.commentId || event.targetUserId), {
+    message: 'An event target is required',
+  });
+
+export const feedEventsSchema = z
+  .object({
+    events: z.array(feedEventSchema).min(1).max(50),
+  })
+  .strict();
 
 export const listenSchema = z.object({
   postId: z.string().uuid(),
@@ -118,6 +168,26 @@ export const reportSchema = z.object({
   targetId: z.string().uuid(),
   reason: z.enum(['spam', 'abuse', 'illegal', 'other']),
   details: z.string().trim().max(500).optional(),
+});
+
+export const bugFeedbackSchema = z.object({
+  description: z.string().trim().min(1).max(1000),
+  screenshotMediaId: z.string().uuid().nullable().optional(),
+});
+
+export const moderationQueueQuerySchema = z.object({
+  status: z.enum(['pending', 'resolved', 'dismissed']).optional().default('pending'),
+  page: z.coerce.number().int().min(1).max(10_000).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+});
+
+export const moderationResolutionSchema = z.object({
+  action: z.enum(['resolved', 'dismissed']),
+  note: z.string().trim().max(1000).optional(),
+});
+
+export const suspensionSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
 });
 
 export const uploadIntentSchema = z.object({

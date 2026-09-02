@@ -1,12 +1,31 @@
 import type { FastifyInstance } from 'fastify';
 import { notifications, posts, trendingSnapshots, users } from '@voiceout/db';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { requireAuth, requireCsrf } from '../plugins/auth.js';
 import { clampLimit } from '../lib/page.js';
 import { toPublicUser } from '../lib/users.js';
 import { z } from 'zod';
 
+export const notificationReadSchema = z
+  .object({
+    all: z.literal(true).optional(),
+    ids: z.array(z.string().uuid()).min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.all) !== Boolean(value.ids), {
+    message: 'Specify exactly one of all or ids',
+  });
+
 export async function notificationRoutes(app: FastifyInstance) {
+  app.get('/notifications/unread-count', async (req, reply) => {
+    requireAuth(req, reply);
+    const [row] = await app.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, req.authUser!.id), isNull(notifications.readAt)));
+    return { count: row?.count ?? 0 };
+  });
+
   app.get('/notifications', async (req, reply) => {
     requireAuth(req, reply);
     const viewer = req.authUser!.id;
@@ -23,6 +42,7 @@ export async function notificationRoutes(app: FastifyInstance) {
       out.push({
         id: n.id,
         type: n.type,
+        message: n.message,
         actor: await toPublicUser(app.db, app.env, app.s3, actor),
         postId: n.postId,
         commentId: n.commentId,
@@ -50,6 +70,7 @@ export async function notificationRoutes(app: FastifyInstance) {
         out.unshift({
           id: `trend-${p.id}`,
           type: 'trending' as const,
+          message: null,
           actor: await toPublicUser(app.db, app.env, app.s3, actor),
           postId: p.id,
           commentId: null,
@@ -60,18 +81,28 @@ export async function notificationRoutes(app: FastifyInstance) {
       }
     }
 
-    return { notifications: out };
+    const [unread] = await app.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, viewer), isNull(notifications.readAt)));
+    return { notifications: out, unreadCount: unread?.count ?? 0 };
   });
 
   app.post('/notifications/read', async (req, reply) => {
     requireAuth(req, reply);
     requireCsrf(req);
-    const body = z.object({ ids: z.array(z.string().uuid()).optional() }).parse(req.body ?? {});
+    const body = notificationReadSchema.parse(req.body ?? {});
     if (body.ids?.length) {
       await app.db
         .update(notifications)
         .set({ readAt: new Date() })
-        .where(and(eq(notifications.userId, req.authUser!.id), eq(notifications.id, body.ids[0]!)));
+        .where(
+          and(
+            eq(notifications.userId, req.authUser!.id),
+            inArray(notifications.id, [...new Set(body.ids)]),
+            isNull(notifications.readAt),
+          ),
+        );
     } else {
       await app.db
         .update(notifications)

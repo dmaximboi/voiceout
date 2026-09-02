@@ -1,10 +1,12 @@
-import { sessions, type Db } from '@voiceout/db';
+import { sessions, users, type Db } from '@voiceout/db';
+import { eq } from 'drizzle-orm';
 import type { FastifyReply } from 'fastify';
 import type { Env } from '../env.js';
 import { randomToken, sha256 } from './crypto.js';
 import { setAuthCookies } from './cookies.js';
 import { signAccess } from './jwt.js';
 import type { Redis } from 'ioredis';
+import { httpError } from './http.js';
 
 export async function createSession(
   db: Db,
@@ -12,6 +14,12 @@ export async function createSession(
   userId: string,
   meta: { userAgent?: string; ip?: string },
 ) {
+  const [account] = await db
+    .select({ suspendedAt: users.suspendedAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (account?.suspendedAt) throw httpError(403, 'Account suspended', { code: 'ACCOUNT_SUSPENDED' });
   const refresh = randomToken(32);
   const csrf = randomToken(24);
   const [session] = await db

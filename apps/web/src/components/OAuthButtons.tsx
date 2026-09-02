@@ -1,20 +1,34 @@
 'use client';
 
+import { api } from '@/lib/api';
+import { useEffect, useState } from 'react';
+
+type Providers = {
+  email: boolean;
+  google: boolean;
+  telegram: boolean;
+  telegramUsername?: string;
+  telegramBotId?: string;
+};
+
 export function OAuthButtons({ next = '/' }: { next?: string }) {
+  const [providers, setProviders] = useState<Providers | null>(null);
+  useEffect(() => {
+    void api<Providers>('/auth/providers').then(setProviders).catch(() => setProviders(null));
+  }, []);
   const q = next && next !== '/' ? `?next=${encodeURIComponent(next)}` : '';
   const btn =
     'grid h-14 w-14 place-items-center rounded-full border border-[var(--line)] bg-[var(--card)] shadow-sm active:bg-[var(--bg)]';
   return (
     <div className="flex items-center justify-center gap-4">
-      <a className={btn} href={`/auth/google${q}`} aria-label="Google">
-        <GoogleMark />
-      </a>
-      <a className={btn} href={`/auth/github${q}`} aria-label="GitHub">
-        <GithubMark />
-      </a>
-      <a className={btn} href={`/auth/tiktok${q}`} aria-label="TikTok">
-        <TiktokMark />
-      </a>
+      {providers?.google ? (
+        <a className={btn} href={`/vo-api/auth/google${q}`} aria-label="Continue with Google">
+          <GoogleMark />
+        </a>
+      ) : null}
+      {providers?.telegram && providers.telegramUsername ? (
+        <TelegramButton next={next} className={btn} />
+      ) : null}
     </div>
   );
 }
@@ -42,24 +56,71 @@ function GoogleMark() {
   );
 }
 
-function GithubMark() {
+function TelegramMark() {
   return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" className="text-[#24292f] dark:text-white">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
       <path
-        fill="currentColor"
-        d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"
+        fill="#2AABEE"
+        d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
+      />
+      <path
+        fill="#fff"
+        d="M16.64 8.14c.14-.62-.45-.92-.94-.72L6.9 11.2c-.6.23-.59.56-.1.7l2.43.76 5.63-3.55c.27-.18.51-.08.31.12l-4.56 4.12-.17 2.55c.24 0 .35-.11.48-.24l1.16-1.13 2.4 1.77c.44.24.76.12.87-.41l1.29-6.05z"
       />
     </svg>
   );
 }
 
-function TiktokMark() {
+function TelegramButton({ next, className }: { next: string; className: string }) {
+  const [busy, setBusy] = useState(false);
+  const [hint, setHint] = useState('');
+
+  async function signIn() {
+    setHint('');
+    setBusy(true);
+    try {
+      const { id, url } = await api<{ id: string; url: string }>('/auth/telegram/start', {
+        method: 'POST',
+        body: JSON.stringify({ next }),
+      });
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setHint('Open Telegram and tap Start.');
+      const deadline = Date.now() + 3 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const wait = await api<{ status: 'pending' | 'expired' | 'done'; handoff?: string }>(
+          `/auth/telegram/wait?id=${encodeURIComponent(id)}`,
+        );
+        if (wait.status === 'done' && wait.handoff) {
+          window.location.assign(wait.handoff);
+          return;
+        }
+        if (wait.status === 'expired') {
+          setHint('That login expired. Tap Telegram again.');
+          setBusy(false);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      }
+      setHint('Timed out. Tap Telegram and Start again.');
+      setBusy(false);
+    } catch {
+      setHint('Could not start Telegram login.');
+      setBusy(false);
+    }
+  }
+
   return (
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.81-2.5 2.89 2.89 0 0 1 2.8-2.96c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15.2 6.34 6.34 0 0 0 9.48 21.5a6.34 6.34 0 0 0 6.33-6.33V8.73a8.18 8.18 0 0 0 4.78 1.52V6.84a4.84 4.84 0 0 1-1-.15z"
-      />
-    </svg>
+    <div className="flex flex-col items-center gap-2">
+      <button
+        type="button"
+        className={className}
+        aria-label="Continue with Telegram"
+        disabled={busy}
+        onClick={() => void signIn()}
+      >
+        <TelegramMark />
+      </button>
+      {hint ? <p className="max-w-48 text-center text-xs text-[var(--muted)]">{hint}</p> : null}
+    </div>
   );
 }

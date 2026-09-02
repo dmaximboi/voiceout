@@ -1,97 +1,130 @@
 import type { FastifyInstance } from 'fastify';
 import { oauthAccounts, sessions, users } from '@voiceout/db';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '@voiceout/shared';
 import { hashPassword, randomToken, sha256, verifyPassword } from '../lib/crypto.js';
 import { sendMail } from '../lib/mail.js';
-import { consumeRedisToken, issueRedisToken } from '../lib/tokens.js';
-import { clearAuthCookies, readCookies, setAuthCookies, setCsrfCookie } from '../lib/cookies.js';
+import { consumeRedisToken, issueRedisToken, issueOtpCode, consumeOtpCode } from '../lib/tokens.js';
+import { clearAuthCookies, readCookies, setAuthCookies, setCsrfCookie, setDeviceCookie } from '../lib/cookies.js';
 import { createSession, issueHandoff, issueSession } from '../lib/session.js';
 import { toMeUser } from '../lib/cooldown.js';
-import { requireAuth, requireCsrf } from '../plugins/auth.js';
+import { requireAuth, requireCsrf, grantAdminStepUp, adminStepUpRemaining } from '../plugins/auth.js';
 import { assertFlag } from '../lib/flags.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { writeAudit } from '../lib/audit.js';
 import { oauthApiOrigin, requestWebOrigin, webOrigin } from '../lib/origins.js';
 import { asDbUser, ensureUserSealed, findLiveUserByEmail } from '../lib/erasure.js';
+import { isUniqueViolation, withRlsOff } from '../lib/rls.js';
+import { randomBytes } from 'node:crypto';
+import { z } from 'zod';
+import {
+  configuredAuthProviders,
+  telegramLoginFromUpdate,
+  validateTelegramLogin,
+  type TelegramBotProfile,
+} from '../lib/telegram.js';
 
 const LOCK_AFTER = 8;
 const LOCK_MS = 15 * 60 * 1000;
+const TG_LOGIN_TTL = 300;
 
 export async function authRoutes(app: FastifyInstance) {
   app.post('/auth/register', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async (req, reply) => {
     requireCsrf(req);
     const body = registerSchema.parse(req.body);
-    const existingEmail = await findLiveUserByEmail(app.db, app.env, body.email);
-    if (existingEmail) return reply.code(409).send({ error: 'Email already registered' });
-    const [existingHandle] = await app.db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.handle, body.handle))
-      .limit(1);
-    if (existingHandle) return reply.code(409).send({ error: 'Handle taken' });
-    const passwordHash = await hashPassword(body.password);
-    const [user] = await app.db
-      .insert(users)
-      .values({
-        email: body.email,
-        passwordHash,
-        handle: body.handle,
-        displayName: sanitizeText(body.displayName),
-      })
-      .returning();
-    if (!user) return reply.code(500).send({ error: 'Failed' });
-    await asDbUser(app.db, user.id);
-    const sealed = await ensureUserSealed(app.db, app.env, user);
-    await issueSession(app.db, app.env, reply, sealed.id, {
-      userAgent: req.headers['user-agent'],
-      ip: req.ip,
+    return withRlsOff(app.db, async () => {
+      const existingEmail = await findLiveUserByEmail(app.db, app.env, body.email);
+      if (existingEmail) return reply.code(409).send({ error: 'Email already registered' });
+      const [existingHandle] = await app.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.handle, body.handle))
+        .limit(1);
+      if (existingHandle) return reply.code(409).send({ error: 'Handle taken' });
+      const passwordHash = await hashPassword(body.password);
+      let user: typeof users.$inferSelect;
+      try {
+        const [created] = await app.db
+          .insert(users)
+          .values({
+            email: body.email,
+            passwordHash,
+            handle: body.handle,
+            displayName: sanitizeText(body.displayName),
+          })
+          .returning();
+        if (!created) return reply.code(500).send({ error: 'Failed' });
+        user = created;
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          return reply.code(409).send({ error: 'Email or handle already registered' });
+        }
+        throw err;
+      }
+      if (!user.id) return reply.code(500).send({ error: 'Failed' });
+      await asDbUser(app.db, user.id);
+      const sealed = await ensureUserSealed(app.db, app.env, user);
+      await issueSession(app.db, app.env, reply, sealed.id, {
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+      });
+      await writeAudit(app.db, req, 'register', sealed.id);
+      const verifyToken = await issueRedisToken(app.redis, 'vo:verify', sealed.id, 60 * 60 * 24);
+      const verifyUrl = `${app.env.WEB_ORIGIN}/login?verify=${verifyToken}`;
+      await sendMail(app.env, req.log, {
+        to: sealed.email,
+        subject: 'Verify your VoiceOut email',
+        text: `Confirm your email: ${verifyUrl}`,
+        url: verifyUrl,
+      });
+      return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
     });
-    await writeAudit(app.db, req, 'register', sealed.id);
-    const verifyToken = await issueRedisToken(app.redis, 'vo:verify', sealed.id, 60 * 60 * 24);
-    const verifyUrl = `${app.env.WEB_ORIGIN}/login?verify=${verifyToken}`;
-    await sendMail(app.env, req.log, {
-      to: sealed.email,
-      subject: 'Verify your VoiceOut email',
-      text: `Confirm your email: ${verifyUrl}`,
-      url: verifyUrl,
-    });
-    return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
   });
 
-  app.post('/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+  app.post('/auth/login', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
     requireCsrf(req);
     const body = loginSchema.parse(req.body);
-    const user = await findLiveUserByEmail(app.db, app.env, body.email);
-    if (!user || !user.passwordHash) return reply.code(401).send({ error: 'Invalid credentials' });
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      return reply.code(423).send({ error: 'Account temporarily locked' });
-    }
-    const ok = await verifyPassword(user.passwordHash, body.password);
-    if (!ok) {
-      const fails = user.failedLoginCount + 1;
+    return withRlsOff(app.db, async () => {
+      const login = body.login.trim().toLowerCase().replace(/^@/, '');
+      const user = login.includes('@')
+        ? await findLiveUserByEmail(app.db, app.env, login)
+        : (
+            await app.db
+              .select()
+              .from(users)
+              .where(and(eq(users.handle, login), isNull(users.deletedAt)))
+              .limit(1)
+          )[0];
+      if (!user || !user.passwordHash) return reply.code(401).send({ error: 'Invalid credentials' });
+      if (user.lockedUntil && user.lockedUntil > new Date()) {
+        return reply.code(423).send({ error: 'Account temporarily locked' });
+      }
+      const ok = await verifyPassword(user.passwordHash, body.password);
+      if (!ok) {
+        const fails = user.failedLoginCount + 1;
+        await app.db
+          .update(users)
+          .set({
+            failedLoginCount: fails,
+            lockedUntil: fails >= LOCK_AFTER ? new Date(Date.now() + LOCK_MS) : null,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, user.id));
+        return reply.code(401).send({ error: 'Invalid credentials' });
+      }
       await app.db
         .update(users)
-        .set({
-          failedLoginCount: fails,
-          lockedUntil: fails >= LOCK_AFTER ? new Date(Date.now() + LOCK_MS) : null,
-          updatedAt: new Date(),
-        })
+        .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
         .where(eq(users.id, user.id));
-      return reply.code(401).send({ error: 'Invalid credentials' });
-    }
-    await app.db
-      .update(users)
-      .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
-      .where(eq(users.id, user.id));
-    await asDbUser(app.db, user.id);
-    const sealed = await ensureUserSealed(app.db, app.env, user);
-    await issueSession(app.db, app.env, reply, sealed.id, {
-      userAgent: req.headers['user-agent'],
-      ip: req.ip,
+      await asDbUser(app.db, user.id);
+      const sealed = await ensureUserSealed(app.db, app.env, user);
+      await issueSession(app.db, app.env, reply, sealed.id, {
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+      });
+      await writeAudit(app.db, req, 'login', sealed.id);
+      return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
     });
-    await writeAudit(app.db, req, 'login', sealed.id);
-    return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
   });
 
   app.post('/auth/logout', async (req, reply) => {
@@ -215,15 +248,13 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get('/auth/providers', async () => ({
-    google: Boolean(app.env.GOOGLE_CLIENT_ID && app.env.GOOGLE_CLIENT_SECRET),
-    github: Boolean(app.env.GITHUB_CLIENT_ID && app.env.GITHUB_CLIENT_SECRET),
-    tiktok: Boolean(app.env.TIKTOK_CLIENT_KEY && app.env.TIKTOK_CLIENT_SECRET),
-  }));
+  app.get('/auth/providers', async () => configuredAuthProviders(app.env));
 
   app.get('/auth/google', async (req, reply) => {
     assertFlag(app.env, 'KILL_OAUTH');
-    if (!app.env.GOOGLE_CLIENT_ID) return reply.code(501).send({ error: 'Google OAuth not configured' });
+    if (!app.env.GOOGLE_CLIENT_ID || !app.env.GOOGLE_CLIENT_SECRET) {
+      return reply.code(404).send({ error: 'Provider unavailable' });
+    }
     const state = randomToken(16);
     const next = safeNext((req.query as { next?: string }).next);
     reply.setCookie('vo_oauth_state', state, oauthCookie(app));
@@ -240,6 +271,9 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/google/callback', async (req, reply) => {
+    if (!app.env.GOOGLE_CLIENT_ID || !app.env.GOOGLE_CLIENT_SECRET) {
+      return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    }
     const q = req.query as { code?: string; state?: string };
     const stateCookie = req.cookies.vo_oauth_state;
     if (!q.code || !q.state || !stateCookie || q.state !== stateCookie) {
@@ -264,7 +298,12 @@ export async function authRoutes(app: FastifyInstance) {
     if (!profileRes.ok) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
     const profile = (await profileRes.json()) as { sub: string; email?: string; name?: string };
     if (!profile.email) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
-    const user = await upsertOAuth(app, 'google', profile.sub, profile.email, profile.name ?? 'User');
+    let user;
+    try {
+      user = await upsertOAuth(app, 'google', profile.sub, profile.email, profile.name ?? 'User');
+    } catch (err) {
+      return redirectOAuthLinkError(app, reply, err);
+    }
     const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
     await writeAudit(app.db, req, 'login_google', user.id);
     const key = await issueHandoff(app.redis, sessionTokens);
@@ -272,6 +311,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/github', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
+    /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
     if (!app.env.GITHUB_CLIENT_ID) return reply.code(501).send({ error: 'GitHub OAuth not configured' });
     const state = randomToken(16);
@@ -288,6 +329,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/github/callback', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    /* legacy callback disabled */
     const q = req.query as { code?: string; state?: string };
     const stateCookie = req.cookies.vo_oauth_state;
     if (!q.code || !q.state || !stateCookie || q.state !== stateCookie) {
@@ -322,13 +365,18 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
     if (!email) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
-    const user = await upsertOAuth(
-      app,
-      'github',
-      String(profile.id),
-      email,
-      profile.name || profile.login || 'User',
-    );
+    let user;
+    try {
+      user = await upsertOAuth(
+        app,
+        'github',
+        String(profile.id),
+        email,
+        profile.name || profile.login || 'User',
+      );
+    } catch (err) {
+      return redirectOAuthLinkError(app, reply, err);
+    }
     const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
     await writeAudit(app.db, req, 'login_github', user.id);
     const key = await issueHandoff(app.redis, sessionTokens);
@@ -336,6 +384,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/tiktok', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
+    /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
     if (!app.env.TIKTOK_CLIENT_KEY) return reply.code(501).send({ error: 'TikTok OAuth not configured' });
     const state = randomToken(16);
@@ -353,6 +403,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/tiktok/callback', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    /* legacy callback disabled */
     const q = req.query as { code?: string; state?: string };
     const stateCookie = req.cookies.vo_oauth_state;
     if (!q.code || !q.state || !stateCookie || q.state !== stateCookie) {
@@ -392,6 +444,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/auth/apple', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
+    /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
     if (!app.env.APPLE_CLIENT_ID) return reply.code(501).send({ error: 'Apple OAuth not configured' });
     const state = randomToken(16);
@@ -409,6 +463,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/auth/apple/callback', async (req, reply) => {
+    if (legacyProvidersDisabled()) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    /* legacy callback disabled */
     const body = req.body as { code?: string; state?: string; user?: string };
     const stateCookie = req.cookies.vo_oauth_state;
     if (!body.code || !body.state || body.state !== stateCookie) {
@@ -440,10 +496,65 @@ export async function authRoutes(app: FastifyInstance) {
       const key = await issueHandoff(app.redis, sessionTokens);
       return finishOAuth(app, reply, req.cookies.vo_oauth_next, key);
     } catch (err) {
+      if (err instanceof Error && err.message === 'EMAIL_UNVERIFIED') {
+        return reply.redirect(`${webOrigin(app.env)}/login?error=email_unverified`);
+      }
       req.log.error(err);
       return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
     }
   });
+
+  app.post(
+    '/auth/telegram',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      assertFlag(app.env, 'KILL_OAUTH');
+      const providers = configuredAuthProviders(app.env);
+      if (!providers.telegram) return reply.code(404).send({ error: 'Provider unavailable' });
+      const body = req.body as { payload?: unknown; next?: string };
+      const profile = validateTelegramLogin(body.payload, app.env.TELEGRAM_BOT_TOKEN);
+      if (!profile) return reply.code(401).send({ error: 'Invalid Telegram login' });
+      return finishTelegramLogin(app, req, reply, profile, body.next);
+    },
+  );
+
+  app.post(
+    '/auth/telegram/start',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      assertFlag(app.env, 'KILL_OAUTH');
+      const providers = configuredAuthProviders(app.env);
+      if (!providers.telegram || !providers.telegramUsername) {
+        return reply.code(404).send({ error: 'Provider unavailable' });
+      }
+      const next = safeNext((req.body as { next?: string } | undefined)?.next);
+      const id = randomBytes(16).toString('hex');
+      await app.redis.set(`vo:tg:login:${id}`, JSON.stringify({ status: 'pending', next }), 'EX', TG_LOGIN_TTL);
+      return { id, url: `https://t.me/${providers.telegramUsername}?start=vo${id}` };
+    },
+  );
+
+  app.get(
+    '/auth/telegram/wait',
+    { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      assertFlag(app.env, 'KILL_OAUTH');
+      const providers = configuredAuthProviders(app.env);
+      if (!providers.telegram) return reply.code(404).send({ error: 'Provider unavailable' });
+      const id = String((req.query as { id?: string }).id ?? '');
+      if (!/^[a-f0-9]{32}$/.test(id)) return reply.code(400).send({ error: 'Invalid login' });
+      await ingestTelegramStarts(app);
+      const raw = await app.redis.get(`vo:tg:login:${id}`);
+      if (!raw) return { status: 'expired' as const };
+      const state = JSON.parse(raw) as { status: string; next?: string; profile?: TelegramBotProfile };
+      if (state.status !== 'ready' || !state.profile) return { status: 'pending' as const };
+      await app.redis.del(`vo:tg:login:${id}`);
+      const result = await finishTelegramLogin(app, req, reply, state.profile, state.next);
+      return { status: 'done' as const, handoff: result.handoff };
+    },
+  );
 
   app.post(
     '/auth/device-link',
@@ -457,6 +568,101 @@ export async function authRoutes(app: FastifyInstance) {
       });
       const k = await issueHandoff(app.redis, tokens);
       return { k };
+    },
+  );
+
+  app.post(
+    '/auth/switch-device',
+    { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } },
+    async (req, reply) => {
+      requireAuth(req, reply);
+      requireCsrf(req);
+      const role = req.authUser!.role;
+      if (role !== 'admin' && role !== 'moderator') {
+        return reply.code(403).send({ error: 'Forbidden' });
+      }
+      const token = randomToken(32);
+      await app.db
+        .update(users)
+        .set({ adminDeviceHash: sha256(token), updatedAt: new Date() })
+        .where(eq(users.id, req.authUser!.id));
+      setDeviceCookie(reply, app.env, token);
+      await writeAudit(app.db, req, 'switch_device_bound', req.authUser!.id);
+      return { ok: true };
+    },
+  );
+
+  app.get('/auth/admin-stepup/status', async (req, reply) => {
+    requireAuth(req, reply);
+    const role = req.authUser!.role;
+    if (role !== 'admin' && role !== 'moderator') {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+    const remainingSec = await adminStepUpRemaining(app, req.authUser!.id);
+    return { active: remainingSec > 0, remainingSec };
+  });
+
+  app.post(
+    '/auth/admin-stepup/code',
+    { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } },
+    async (req, reply) => {
+      requireAuth(req, reply);
+      requireCsrf(req);
+      const role = req.authUser!.role;
+      if (role !== 'admin' && role !== 'moderator') {
+        return reply.code(403).send({ error: 'Forbidden' });
+      }
+      const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      if (!user || user.email.endsWith('@users.invalid')) {
+        return reply.code(400).send({ error: 'Add a real email before using email confirmation' });
+      }
+      const code = await issueOtpCode(app.redis, 'vo:admin-stepup-otp', user.id, {});
+      await sendMail(app.env, req.log, {
+        to: user.email,
+        subject: 'VoiceOut panel confirmation code',
+        text: `Your confirmation code is ${code}. It expires in 10 minutes.`,
+      });
+      await writeAudit(app.db, req, 'admin_stepup_code', req.authUser!.id);
+      return { ok: true };
+    },
+  );
+
+  app.post(
+    '/auth/admin-stepup',
+    { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } },
+    async (req, reply) => {
+      requireAuth(req, reply);
+      requireCsrf(req);
+      const role = req.authUser!.role;
+      if (role !== 'admin' && role !== 'moderator') {
+        return reply.code(403).send({ error: 'Forbidden' });
+      }
+      const body = z
+        .object({
+          password: z.string().min(1).max(128).optional(),
+          code: z.string().trim().min(4).max(12).optional(),
+        })
+        .parse(req.body ?? {});
+      if (!body.password && !body.code) {
+        return reply.code(400).send({ error: 'Enter your password or email code' });
+      }
+      const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+
+      if (body.password) {
+        if (!user.passwordHash) {
+          return reply.code(400).send({ error: 'This account has no password. Use the email code.' });
+        }
+        const ok = await verifyPassword(user.passwordHash, body.password);
+        if (!ok) return reply.code(401).send({ error: 'Wrong password' });
+      } else if (body.code) {
+        const otp = await consumeOtpCode(app.redis, 'vo:admin-stepup-otp', user.id, body.code);
+        if (!otp) return reply.code(400).send({ error: 'Invalid or expired code' });
+      }
+
+      const ttl = await grantAdminStepUp(app, user.id);
+      await writeAudit(app.db, req, 'admin_stepup', user.id);
+      return { ok: true, remainingSec: ttl };
     },
   );
 
@@ -486,6 +692,89 @@ function oauthCookie(app: FastifyInstance) {
   };
 }
 
+async function finishTelegramLogin(
+  app: FastifyInstance,
+  req: import('fastify').FastifyRequest,
+  reply: import('fastify').FastifyReply,
+  profile: TelegramBotProfile & { phone?: string },
+  next?: string,
+) {
+  const email = `telegram_${profile.id}@users.invalid`;
+  const name =
+    [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.username || 'Telegram user';
+  const user = await upsertOAuth(app, 'telegram', profile.id, email, name, false);
+  if (profile.phone) {
+    const [taken] = await app.db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.phone, profile.phone), ne(users.id, user.id)))
+      .limit(1);
+    if (taken) {
+      return reply.code(409).send({
+        error: 'This phone is already on another account. Log in there instead.',
+        code: 'PHONE_IN_USE',
+      });
+    }
+    if (!user.phone) {
+      await app.db.update(users).set({ phone: profile.phone, updatedAt: new Date() }).where(eq(users.id, user.id));
+    }
+  }
+  const tokens = await issueSession(app.db, app.env, reply, user.id, {
+    userAgent: req.headers['user-agent'],
+    ip: req.ip,
+  });
+  await writeAudit(app.db, req, 'login_telegram', user.id);
+  const key = await issueHandoff(app.redis, tokens);
+  return { handoff: `/vo-api/auth/handoff?k=${encodeURIComponent(key)}&next=${encodeURIComponent(safeNext(next))}` };
+}
+
+async function ingestTelegramStarts(app: FastifyInstance) {
+  const token = app.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const locked = await app.redis.set('vo:tg:poll', '1', 'EX', 8, 'NX');
+  if (!locked) return;
+  try {
+    const offset = await app.redis.get('vo:tg:offset');
+    const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
+    url.searchParams.set('timeout', '0');
+    url.searchParams.set('allowed_updates', JSON.stringify(['message']));
+    if (offset) url.searchParams.set('offset', offset);
+    let res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    let body = (await res.json()) as { ok?: boolean; result?: unknown[]; error_code?: number };
+    if (body.error_code === 409) {
+      await fetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      body = (await res.json()) as { ok?: boolean; result?: unknown[]; error_code?: number };
+    }
+    if (!body.ok || !Array.isArray(body.result)) return;
+    let maxId = offset ? Number(offset) - 1 : 0;
+    for (const update of body.result) {
+      const updateId = (update as { update_id?: number }).update_id;
+      if (typeof updateId === 'number' && updateId > maxId) maxId = updateId;
+      const parsed = telegramLoginFromUpdate(update);
+      if (!parsed) continue;
+      const key = `vo:tg:login:${parsed.loginId}`;
+      const raw = await app.redis.get(key);
+      if (!raw) continue;
+      const state = JSON.parse(raw) as { status: string; next?: string };
+      if (state.status !== 'pending') continue;
+      await app.redis.set(
+        key,
+        JSON.stringify({ status: 'ready', next: state.next, profile: parsed.profile }),
+        'EX',
+        TG_LOGIN_TTL,
+      );
+    }
+    if (body.result.length) await app.redis.set('vo:tg:offset', String(maxId + 1));
+  } catch (err) {
+    app.log.warn({ err }, 'telegram getUpdates failed');
+  } finally {
+    await app.redis.del('vo:tg:poll');
+  }
+}
+
 function safeNext(raw?: string) {
   if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || raw.includes('://')) return '/';
   return raw.slice(0, 200);
@@ -502,12 +791,20 @@ function finishOAuth(app: FastifyInstance, reply: import('fastify').FastifyReply
   return reply.redirect(`${webOrigin(app.env)}${next}`);
 }
 
+function redirectOAuthLinkError(app: FastifyInstance, reply: import('fastify').FastifyReply, err: unknown) {
+  if (err instanceof Error && err.message === 'EMAIL_UNVERIFIED') {
+    return reply.redirect(`${webOrigin(app.env)}/login?error=email_unverified`);
+  }
+  throw err;
+}
+
 async function upsertOAuth(
   app: FastifyInstance,
-  provider: 'google' | 'apple' | 'github' | 'tiktok',
+  provider: 'google' | 'apple' | 'github' | 'tiktok' | 'telegram',
   providerAccountId: string,
   email: string,
   displayName: string,
+  allowEmailLink = true,
 ) {
   const [existing] = await app.db
     .select()
@@ -522,8 +819,12 @@ async function upsertOAuth(
     }
     await app.db.delete(oauthAccounts).where(eq(oauthAccounts.id, existing.id));
   }
-  const byEmail = await findLiveUserByEmail(app.db, app.env, email);
+  const byEmail = allowEmailLink ? await findLiveUserByEmail(app.db, app.env, email) : null;
   if (byEmail) {
+    // Block takeover: attacker registers unverified email, victim later OAuths that email.
+    if (!byEmail.emailVerifiedAt) {
+      throw new Error('EMAIL_UNVERIFIED');
+    }
     await app.db.insert(oauthAccounts).values({ userId: byEmail.id, provider, providerAccountId });
     await asDbUser(app.db, byEmail.id);
     return ensureUserSealed(app.db, app.env, byEmail);
@@ -578,3 +879,7 @@ async function appleClientSecret(app: FastifyInstance) {
 }
 
 void requireAuth;
+
+function legacyProvidersDisabled() {
+  return true;
+}

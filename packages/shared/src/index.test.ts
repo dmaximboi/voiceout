@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { handleSchema, passwordSchema, isAllowedAudioMime } from './schemas';
-import { DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
+import {
+  createCommentSchema,
+  feedEventsSchema,
+  feedFeedbackSchema,
+  handleSchema,
+  passwordSchema,
+  isAllowedAudioMime,
+} from './schemas';
+import { COMMENT_CATEGORIES, DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
 import { nameChangeAvailableAt, passwordChangeAvailableAt } from './cooldowns';
+import { isPrivateAdminRequest, isPrivateHost, isPrivateIp } from './lan';
 import { matchesUploadMagic } from './magic';
+import { canUseDurationCap, isStudioActive } from './plan';
 
 describe('handleSchema', () => {
   it('accepts valid handles', () => {
@@ -32,6 +41,28 @@ describe('caps', () => {
     for (const cap of DURATION_CAPS) {
       expect(MAX_AUDIO_BYTES[cap]).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('studio plan', () => {
+  it('keeps 5m and 15m behind studio', () => {
+    expect(canUseDurationCap(60, false)).toBe(true);
+    expect(canUseDurationCap(120, false)).toBe(true);
+    expect(canUseDurationCap(300, false)).toBe(false);
+    expect(canUseDurationCap(900, false)).toBe(false);
+    expect(canUseDurationCap(900, true)).toBe(true);
+    expect(isStudioActive(null)).toBe(false);
+    expect(isStudioActive(new Date(Date.now() + 60_000))).toBe(true);
+  });
+});
+
+describe('private admin hosts', () => {
+  it('allows loopback and LAN, rejects public hosts', () => {
+    expect(isPrivateHost('localhost')).toBe(true);
+    expect(isPrivateHost('192.168.1.64')).toBe(true);
+    expect(isPrivateIp('10.0.0.8')).toBe(true);
+    expect(isPrivateHost('voiceout.example')).toBe(false);
+    expect(isPrivateAdminRequest('192.168.1.64', '')).toBe(true);
   });
 });
 
@@ -68,5 +99,43 @@ describe('upload magic', () => {
     jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
     expect(matchesUploadMagic('audio/ogg', jpeg)).toBe(false);
     expect(matchesUploadMagic('image/jpeg', jpeg)).toBe(true);
+  });
+});
+
+describe('phase 2 signal schemas', () => {
+  it('exposes the complete comment category allowlist', () => {
+    expect(COMMENT_CATEGORIES).toContain('supportive');
+    expect(COMMENT_CATEGORIES).toContain('personal_story');
+    expect(COMMENT_CATEGORIES).toContain('off_topic');
+    expect(COMMENT_CATEGORIES).toHaveLength(17);
+  });
+
+  it('accepts a reply target on comments', () => {
+    const replyToCommentId = '00000000-0000-4000-8000-000000000001';
+    expect(createCommentSchema.parse({ body: 'Reply', replyToCommentId }).replyToCommentId).toBe(
+      replyToCommentId,
+    );
+  });
+
+  it('only accepts strict feedback kinds', () => {
+    const postId = '00000000-0000-4000-8000-000000000001';
+    expect(feedFeedbackSchema.parse({ postId, kind: 'not_interested' })).toEqual({
+      postId,
+      kind: 'not_interested',
+    });
+    expect(() => feedFeedbackSchema.parse({ postId, kind: 'block' })).toThrow();
+    expect(() => feedFeedbackSchema.parse({ postId, kind: 'hide_author', extra: true })).toThrow();
+  });
+
+  it('bounds and strictly validates feed event batches', () => {
+    const postId = '00000000-0000-4000-8000-000000000001';
+    expect(feedEventsSchema.parse({ events: [{ eventType: 'impression', postId }] }).events).toHaveLength(1);
+    expect(() => feedEventsSchema.parse({ events: [{ eventType: 'unknown', postId }] })).toThrow();
+    expect(() => feedEventsSchema.parse({ events: [{ eventType: 'seen' }] })).toThrow();
+    expect(() =>
+      feedEventsSchema.parse({
+        events: Array.from({ length: 51 }, () => ({ eventType: 'seen', postId })),
+      }),
+    ).toThrow();
   });
 });

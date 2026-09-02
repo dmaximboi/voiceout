@@ -14,3 +14,30 @@ export async function consumeRedisToken(redis: Redis, prefix: string, token: str
   await redis.del(key);
   return userId;
 }
+
+export async function issueOtpCode(
+  redis: Redis,
+  prefix: string,
+  userId: string,
+  payload: Record<string, string>,
+  ttlSec = 600,
+) {
+  const code = String(100000 + Math.floor(Math.random() * 900000));
+  await redis.set(
+    `${prefix}:${userId}`,
+    JSON.stringify({ codeHash: sha256(code), ...payload }),
+    'EX',
+    ttlSec,
+  );
+  return code;
+}
+
+export async function consumeOtpCode(redis: Redis, prefix: string, userId: string, code: string) {
+  const key = `${prefix}:${userId}`;
+  const raw = await redis.get(key);
+  if (!raw) return null;
+  const data = JSON.parse(raw) as { codeHash: string } & Record<string, string>;
+  if (data.codeHash !== sha256(code.trim())) return null;
+  await redis.del(key);
+  return data;
+}

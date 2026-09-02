@@ -47,9 +47,11 @@ function applyCookie(res: NextResponse, raw: string) {
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   try {
     const { path } = await ctx.params;
+    if (path.some((p) => !p || p === '.' || p === '..' || p.includes('\\') || p.includes('\0'))) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404, headers: { 'cache-control': 'no-store' } });
+    }
     const incoming = new URL(req.url);
-    const target = `${API}/${path.join('/')}${incoming.search}`;
-    const isMediaFile = path[0] === 'media' && path[path.length - 1] === 'file';
+    const target = `${API}/${path.map(encodeURIComponent).join('/')}${incoming.search}`;
     const headers = new Headers();
     const cookie = req.headers.get('cookie');
     if (cookie) headers.set('cookie', cookie);
@@ -66,6 +68,22 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     headers.set('x-request-id', req.headers.get('x-request-id') ?? crypto.randomUUID());
     headers.set('x-forwarded-host', incoming.host);
     headers.set('x-forwarded-proto', incoming.protocol.replace(':', ''));
+    // Always pass a client IP so API rate limits are not shared as 127.0.0.1.
+    const forwardedFor = req.headers.get('x-forwarded-for');
+    const realIp =
+      req.headers.get('cf-connecting-ip') ||
+      req.headers.get('x-real-ip') ||
+      req.headers.get('x-vercel-forwarded-for');
+    if (forwardedFor) {
+      headers.set('x-forwarded-for', forwardedFor);
+    } else if (realIp) {
+      headers.set('x-forwarded-for', realIp);
+    } else {
+      // Local/dev fallback: separate buckets per browser UA when IP is the Next server.
+      const ua = (req.headers.get('user-agent') ?? 'local').slice(0, 64);
+      headers.set('x-forwarded-for', `127.0.0.1`);
+      headers.set('x-vo-client', ua);
+    }
     headers.set('accept', req.headers.get('accept') ?? '*/*');
 
     const method = req.method;
@@ -76,7 +94,7 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
       headers,
       body,
       redirect: 'manual',
-      cache: isMediaFile ? 'force-cache' : 'no-store',
+      cache: 'no-store',
     });
 
     const out = new Headers();
@@ -85,7 +103,7 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
       if (lower === 'transfer-encoding' || lower === 'content-encoding' || lower === 'set-cookie') return;
       out.set(key, value);
     });
-    if (!isMediaFile) out.set('cache-control', 'no-store');
+    if (!out.has('cache-control')) out.set('cache-control', 'no-store');
 
     const response =
       upstream.status >= 300 && upstream.status < 400

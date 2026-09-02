@@ -5,12 +5,14 @@ import { timingSafeEqualStr } from './crypto.js';
 const ACCESS = 'vo_access';
 const REFRESH = 'vo_refresh';
 const CSRF = 'vo_csrf';
+const DEVICE = 'vo_device';
 
 function cookieBase(env: Env, secureOverride?: boolean) {
   const secure = secureOverride ?? (env.NODE_ENV === 'production' || env.WEB_ORIGIN.startsWith('https://'));
+  // Same-origin /vo-api proxy: Lax is enough and avoids cross-site cookie sends.
   return {
     path: '/',
-    sameSite: (secure ? 'none' : 'lax') as 'none' | 'lax',
+    sameSite: 'lax' as const,
     secure,
     httpOnly: true as const,
   };
@@ -46,11 +48,17 @@ export function clearAuthCookies(reply: FastifyReply, env: Env) {
   reply.clearCookie(CSRF, { ...base, httpOnly: false });
 }
 
+export function setDeviceCookie(reply: FastifyReply, env: Env, token: string) {
+  const base = cookieBase(env);
+  reply.setCookie(DEVICE, token, { ...base, maxAge: 60 * 60 * 24 * 400 });
+}
+
 export function readCookies(req: FastifyRequest) {
   return {
     access: req.cookies[ACCESS],
     refresh: req.cookies[REFRESH],
     csrf: req.cookies[CSRF],
+    device: req.cookies[DEVICE],
   };
 }
 

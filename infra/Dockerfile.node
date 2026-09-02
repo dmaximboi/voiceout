@@ -1,14 +1,22 @@
+# Shared Node image for API (Fly) and backend workers (Render).
+# Build context: monorepo root.
 FROM node:22-bookworm-slim
-RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+
+RUN corepack enable \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
   && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /repo
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json .npmrc* ./
+COPY apps ./apps
 COPY packages ./packages
-COPY apps/web/package.json ./apps/web/package.json
-COPY apps/api/package.json ./apps/api/package.json
-COPY apps/backend/package.json ./apps/backend/package.json
-COPY apps/payments/package.json ./apps/payments/package.json
-RUN pnpm install --frozen-lockfile || pnpm install
-COPY . .
-WORKDIR /repo
-CMD ["pnpm", "--filter", "@voiceout/api", "start"]
+
+RUN pnpm install --frozen-lockfile
+
+ENV NODE_ENV=production
+ENV API_PORT=4000
+ENV BACKEND_PORT=4001
+
+# Default: API. Render overrides with dockerCommand for backend.
+CMD ["sh", "-c", "API_PORT=${PORT:-${API_PORT:-4000}} pnpm --filter @voiceout/api start"]

@@ -50,6 +50,8 @@ export const SAMPLE_POSTS: PostCard[] = [
     repostedByMe: false,
     voicedByMe: false,
     status: 'published',
+    categories: {},
+    rankReasons: [],
   },
   {
     id: 'sample-2',
@@ -71,6 +73,8 @@ export const SAMPLE_POSTS: PostCard[] = [
     repostedByMe: false,
     voicedByMe: false,
     status: 'published',
+    categories: {},
+    rankReasons: [],
   },
   {
     id: 'sample-3',
@@ -92,5 +96,7 @@ export const SAMPLE_POSTS: PostCard[] = [
     repostedByMe: false,
     voicedByMe: false,
     status: 'published',
+    categories: {},
+    rankReasons: [],
   },
 ];

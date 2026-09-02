@@ -1,5 +1,5 @@
 import { notifications, type Db } from '@voiceout/db';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 export async function notify(
   db: Db,
@@ -12,6 +12,20 @@ export async function notify(
   },
 ) {
   if (input.userId === input.actorId) return;
+  if (input.type === 'follow') {
+    const [existing] = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, input.userId),
+          eq(notifications.actorId, input.actorId),
+          eq(notifications.type, 'follow'),
+        ),
+      )
+      .limit(1);
+    if (existing) return;
+  }
   await db.insert(notifications).values({
     userId: input.userId,
     actorId: input.actorId,
@@ -27,5 +41,6 @@ export async function notifyFollowersOfPost(db: Db, authorId: string, postId: st
     select follower_id, ${authorId}::uuid, 'follow_post'::notification_type, ${postId}::uuid
     from follows
     where followee_id = ${authorId}::uuid
+      and notify_posts = true
   `);
 }

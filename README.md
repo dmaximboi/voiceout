@@ -1,21 +1,31 @@
 # VoiceOut
 
-Voice-first social network. Posts are recorded voice notes plus required text. v1 is the public social core (no live rooms, no post images, no sticker studio, no payments).
+VoiceOut is a voice-first social app. People record short voice notes, add a caption, optionally attach photos, follow others, reply with voice or text, and listen in a home feed.
 
-## Apps
+Site: [https://voiceout.xyz](https://voiceout.xyz)
 
-| Path | Role |
-| --- | --- |
-| `apps/web` | Next.js PWA (Vercel) |
-| `apps/api` | Public REST API (Railway) |
-| `apps/backend` | Workers: audio probe, trending jobs |
-| `apps/algo` | Python ranking + trending |
-| `apps/payments` | Stub only (v2) |
+## Stack
+
+| Part | Role | Production host |
+| --- | --- | --- |
+| `apps/web` | Next.js PWA | Vercel |
+| `apps/api` | HTTP API | Fly.io |
+| `apps/backend` | Background workers | Render |
+| `apps/algo` | Ranking (Python) | Railway |
+| `packages/db` | Schema + migrations | Neon |
+| `packages/shared` | Shared types | — |
+
+Browser → `https://voiceout.xyz` → same-origin `/vo-api` → Fly API.
+
+## Docs
+
+- [Deploy (Vercel + Fly + Render + Railway)](docs/DEPLOY.md)
+- [API overview](docs/API.md)
 
 ## Local development
 
-1. Copy `.env.example` to `.env` in the repo root (compose reads it) and to `apps/web/.env.local`.
-2. Start data stores:
+1. Copy `.env.example` → `.env` and set `apps/web/.env.local` if needed.
+2. Start local deps:
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d postgres redis minio minio-init
@@ -26,36 +36,30 @@ docker compose -f infra/docker-compose.yml up -d postgres redis minio minio-init
 ```bash
 pnpm install
 pnpm db:migrate
+pnpm db:gate
 ```
 
-4. Run Python algo (optional; API falls back if it is down):
+4. Optional algo:
 
 ```bash
 cd apps/algo
 python -m venv .venv
-.venv\Scripts\activate
+# Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 5000
 ```
 
-5. Run Node apps:
+5. Run apps:
 
 ```bash
 pnpm dev
 ```
 
-Web: http://localhost:3000  
-API: http://localhost:4000/health  
-MinIO console: http://localhost:9001 (minio / minio-secret)
+- Web: http://localhost:3000  
+- API: http://localhost:4000/health  
 
-## Full stack via Docker
+## Security notes
 
-```bash
-docker compose -f infra/docker-compose.yml up --build
-```
-
-Open **http://localhost:2000** (host port 2000 maps to the gateway on 2005). API, web, algo, and workers are not published on the LAN.
-
-## Auth
-
-Email/password always. Google and Apple OAuth activate when the corresponding env vars are set.
+- Never commit `.env`, `.env.production.local`, or `detail.md`
+- CI runs gitleaks + typecheck + tests + web build
+- Production must use Neon app-role `DATABASE_URL`, Upstash `rediss://`, R2 keys, and `SKIP_MEDIA_PROBE=false`

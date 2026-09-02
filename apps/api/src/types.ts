@@ -10,6 +10,8 @@ export type AuthUser = {
   email: string;
   sid: string;
   role: 'user' | 'moderator' | 'admin';
+  isVerifiedIdentity: boolean;
+  isStudio: boolean;
 };
 
 declare module 'fastify' {

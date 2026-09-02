@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { mediaDurationSec } from './audioPeaks';
+import { claimPlayback, registerPlayerPause } from './audioGate';
+import { emitFeedEvent } from './feedEvents';
 
 export type Track = {
   id: string;
@@ -17,6 +19,8 @@ type PlayerCtx = {
   duration: number;
   currentMs: number;
   play: (track: Track) => void;
+  pause: () => void;
+  stop: () => void;
   toggle: () => void;
   seekRatio: (ratio: number) => void;
   reportDuration: (trackId: string, durationMs: number) => void;
@@ -101,6 +105,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (next: Track) => {
       const el = audioRef.current;
       if (!el || !next.src) return;
+      claimPlayback();
       if (trackRef.current?.id === next.id && el.getAttribute('src') === next.src) {
         tryPlay(el, () => setPlaying(true), () => setPlaying(false));
         return;
@@ -112,22 +117,48 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCurrentMs(0);
       setDuration(next.durationMs);
       loadSrc(el, next.src);
-      tryPlay(el, () => setPlaying(true), () => setPlaying(false));
+      tryPlay(el, () => {
+        setPlaying(true);
+        emitFeedEvent({ eventType: 'play', postId: next.id, source: 'player' });
+      }, () => setPlaying(false));
     },
     [flushListen, loadSrc],
   );
+
+  const pause = useCallback(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playingRef.current) {
+      el.pause();
+      setPlaying(false);
+      flushListen();
+    }
+  }, [flushListen]);
+
+  const stop = useCallback(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.pause();
+    el.removeAttribute('src');
+    el.load();
+    setPlaying(false);
+    setTrack(null);
+    setProgress(0);
+    setCurrentMs(0);
+    setDuration(0);
+    flushListen();
+  }, [flushListen]);
 
   const toggle = useCallback(() => {
     const el = audioRef.current;
     if (!el || !trackRef.current) return;
     if (playingRef.current) {
-      el.pause();
-      setPlaying(false);
-      flushListen();
+      pause();
     } else {
+      claimPlayback();
       tryPlay(el, () => setPlaying(true), () => setPlaying(false));
     }
-  }, [flushListen]);
+  }, [pause]);
 
   const seekRatio = useCallback(
     (ratio: number) => {
@@ -160,6 +191,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const dur = durationSec(el);
       setCurrentMs(dur * 1000);
       flushListen();
+      const current = trackRef.current;
+      if (current) emitFeedEvent({ eventType: 'complete', postId: current.id, source: 'player' });
     };
     const onPlay = () => {
       lastTickRef.current = el.currentTime;
@@ -198,6 +231,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [playing, syncProgress]);
 
   useEffect(() => {
+    return registerPlayerPause(() => {
+      const el = audioRef.current;
+      if (!el) return;
+      if (!playingRef.current && !trackRef.current) return;
+      el.pause();
+      setPlaying(false);
+      flushListen();
+    });
+  }, [flushListen]);
+
+  useEffect(() => {
     return () => flushListen();
   }, [flushListen]);
 
@@ -209,11 +253,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       duration: duration || (track?.durationMs ?? 0),
       currentMs,
       play,
+      pause,
+      stop,
       toggle,
       seekRatio,
       reportDuration,
     }),
-    [track, playing, progress, duration, currentMs, play, toggle, seekRatio, reportDuration],
+    [track, playing, progress, duration, currentMs, play, pause, stop, toggle, seekRatio, reportDuration],
   );
 
   return (

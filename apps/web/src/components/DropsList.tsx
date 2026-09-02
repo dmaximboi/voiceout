@@ -7,9 +7,11 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Avatar } from '@/components/Avatar';
 import { SendBar } from './SendProgress';
+import { useNotifications } from '@/lib/notifications';
 
-export function DropsList() {
+export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) {
   const { user, loading } = useAuth();
+  const { markRead } = useNotifications();
   const [items, setItems] = useState<NotificationCard[] | null>(null);
 
   useEffect(() => {
@@ -20,16 +22,21 @@ export function DropsList() {
     let cancelled = false;
     void api<{ notifications: NotificationCard[] }>('/notifications')
       .then((d) => {
-        if (!cancelled) setItems(d.notifications);
+        if (cancelled) return;
+        setItems(d.notifications);
+        const unreadIds = d.notifications.filter((item) => !item.readAt && !item.id.startsWith('trend-')).map((item) => item.id);
+        if (unreadIds.length) {
+          onViewed?.(unreadIds);
+          void markRead(unreadIds).catch(() => undefined);
+        }
       })
-      .then(() => api('/notifications/read', { method: 'POST', body: '{}' }))
       .catch(() => {
         if (!cancelled) setItems([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, markRead, onViewed]);
 
   if (loading || items === null) {
     return <p className="px-4 py-6 text-sm text-[var(--muted)]">Checking drops.</p>;

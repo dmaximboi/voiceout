@@ -1,4 +1,6 @@
-const OPUS_BITS = 12_000;
+import { claimRecording, registerRecorder } from './audioGate';
+
+const OPUS_BITS = 20_000;
 const SPEECH_MIME = 'audio/ogg;codecs=opus';
 const ENCODER_PATH = '/opus/encoderWorker.min.js';
 
@@ -67,14 +69,49 @@ export function warmupOpus() {
 }
 
 function openMic() {
-  return navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  const audio: MediaTrackConstraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  const advanced = audio as MediaTrackConstraints & {
+    voiceIsolation?: boolean;
+    googExperimentalNoiseSuppression?: boolean;
+  };
+  advanced.voiceIsolation = true;
+  advanced.googExperimentalNoiseSuppression = true;
+  return navigator.mediaDevices.getUserMedia({ audio });
+}
+
+/** High-pass + gate-ish compressor so distant noise is quieter than near speech. */
+function nearVoiceChain(ctx: AudioContext, source: MediaStreamAudioSourceNode) {
+  const highpass = ctx.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 180;
+  highpass.Q.value = 0.7;
+
+  const presence = ctx.createBiquadFilter();
+  presence.type = 'peaking';
+  presence.frequency.value = 1800;
+  presence.Q.value = 0.9;
+  presence.gain.value = 4.5;
+
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -28;
+  compressor.knee.value = 18;
+  compressor.ratio.value = 10;
+  compressor.attack.value = 0.002;
+  compressor.release.value = 0.18;
+
+  const gate = ctx.createGain();
+  gate.gain.value = 1.15;
+
+  source.connect(highpass);
+  highpass.connect(presence);
+  presence.connect(compressor);
+  compressor.connect(gate);
+  return gate;
 }
 
 function watchLevel(analyser: AnalyserNode, onLevel?: (levels: number[]) => void) {
@@ -95,46 +132,61 @@ export async function startOpusRecording(opts: {
   onStop: (blob: Blob) => void;
   onLevel?: (levels: number[]) => void;
 }): Promise<OpusHandle> {
+  claimRecording();
   await warmupOpus();
   const ctx = audioCtx();
   if (ctx.state === 'suspended') await ctx.resume();
 
   const live = await openMic();
   const source = ctx.createMediaStreamSource(live);
-  const compressor = ctx.createDynamicsCompressor();
-  compressor.threshold.value = -18;
-  compressor.knee.value = 12;
-  compressor.ratio.value = 4;
-  compressor.attack.value = 0.003;
-  compressor.release.value = 0.25;
+  const focused = nearVoiceChain(ctx, source);
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 64;
-  source.connect(compressor);
-  compressor.connect(analyser);
+  focused.connect(analyser);
   const stopLevel = watchLevel(analyser, opts.onLevel);
 
+  const processedDest = ctx.createMediaStreamDestination();
+  focused.connect(processedDest);
+
   let closed = false;
+  let handle: OpusHandle | null = null;
   const cleanup = () => {
     if (closed) return;
     closed = true;
     stopLevel();
     try {
       source.disconnect();
+      focused.disconnect();
     } catch {
-      /* already disconnected by encoder close */
+      /* already disconnected */
     }
     live.getTracks().forEach((t) => t.stop());
   };
 
+  const wrapStop = (inner: OpusHandle): OpusHandle => {
+    const stop = () => {
+      unregister();
+      inner.stop();
+    };
+    const unregister = registerRecorder(stop);
+    return {
+      mime: inner.mime,
+      pause: () => inner.pause(),
+      resume: () => inner.resume(),
+      stop,
+    };
+  };
+
   if (canPlaySpeechOpus() && RecorderMod?.isRecordingSupported()) {
     try {
-      return await startVoip(compressor, cleanup, opts.onStop);
+      handle = wrapStop(await startVoip(focused, cleanup, opts.onStop));
+      return handle;
     } catch {
-      /* MediaRecorder still records the live mic */
+      /* fall through to MediaRecorder on processed stream */
     }
   }
 
-  return startMediaRecorder(live, cleanup, opts.onStop);
+  return wrapStop(startMediaRecorder(processedDest.stream, cleanup, opts.onStop));
 }
 
 async function startVoip(source: AudioNode, cleanup: () => void, onStop: (blob: Blob) => void) {
@@ -150,7 +202,7 @@ async function startVoip(source: AudioNode, cleanup: () => void, onStop: (blob: 
     encoderComplexity: 8,
     resampleQuality: 5,
     monitorGain: 0,
-    recordingGain: 0.85,
+    recordingGain: 0.95,
   });
 
   let stopping = false;
@@ -185,13 +237,13 @@ async function startVoip(source: AudioNode, cleanup: () => void, onStop: (blob: 
   };
 }
 
-function startMediaRecorder(live: MediaStream, cleanup: () => void, onStop: (blob: Blob) => void): OpusHandle {
+function startMediaRecorder(stream: MediaStream, cleanup: () => void, onStop: (blob: Blob) => void): OpusHandle {
   const mime = opusMime();
   let rec: MediaRecorder;
   try {
-    rec = new MediaRecorder(live, { mimeType: mime, audioBitsPerSecond: OPUS_BITS });
+    rec = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: OPUS_BITS });
   } catch {
-    rec = new MediaRecorder(live);
+    rec = new MediaRecorder(stream);
   }
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => {

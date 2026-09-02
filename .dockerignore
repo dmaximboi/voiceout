@@ -5,6 +5,16 @@ node_modules
 **/.venv
 **/__pycache__
 infra/data
+infra/bin
 *.log
 .env
-.env.local
+.env.*
+!.env.example
+detail.md
+details.md
+secrets.md
+**/*.md
+!README.md
+coverage
+.pnpm-store
+tmp-*.bin

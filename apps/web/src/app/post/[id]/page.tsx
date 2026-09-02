@@ -1,7 +1,14 @@
 'use client';
 
-import { PRESET_STICKERS, type CommentCard, type PostCard } from '@voiceout/shared';
-import { Heart, Loader2, Mic, Smile, Square } from 'lucide-react';
+import {
+  COMMENT_CATEGORIES,
+  MAX_COMMENT_LENGTH,
+  PRESET_STICKERS,
+  type CommentCard,
+  type CommentCategory,
+  type PostCard,
+} from '@voiceout/shared';
+import { Heart, Loader2, Mic, Reply, Smile, Square, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, Suspense } from 'react';
@@ -11,6 +18,7 @@ import { startOpusRecording, warmupOpus, type OpusHandle } from '@/lib/recordOpu
 import { FeedCard } from '@/components/FeedCard';
 import { WaveformPlayer } from '@/components/WaveformPlayer';
 import { Avatar } from '@/components/AppShell';
+import { ReportDialog } from '@/components/ReportDialog';
 
 export default function PostPage() {
   return (
@@ -37,6 +45,9 @@ function PostPageInner() {
   const [missing, setMissing] = useState(false);
   const [fatal, setFatal] = useState<Error | null>(null);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const [commentCategory, setCommentCategory] = useState<'all' | CommentCategory>('all');
+  const [replyToCommentId, setReplyToCommentId] = useState<string | null>(null);
+  const [reportComment, setReportComment] = useState<CommentCard | null>(null);
   const recRef = useRef<OpusHandle | null>(null);
   const micLock = useRef(false);
   const textRef = useRef<HTMLInputElement | null>(null);
@@ -71,7 +82,9 @@ function PostPageInner() {
   useEffect(() => {
     if (loading || !user || !via || !id) return;
     if (!/^[0-9a-f-]{36}$/i.test(via) || via === user.id) return;
-    void api(`/posts/${id}/share-open`, { method: 'POST', body: JSON.stringify({ via }) }).catch(() => undefined);
+    void api(`/posts/${id}/share-open`, { method: 'POST', body: JSON.stringify({ via }) }).catch(
+      () => undefined,
+    );
   }, [id, loading, user, via]);
 
   function insertEmoji(emoji: string) {
@@ -133,12 +146,18 @@ function PostPageInner() {
     try {
       let mediaId: string | undefined;
       if (voiceBlob) mediaId = await uploadAudio('comment_audio', voiceBlob, 30);
-      await api(`/posts/${id}/comments`, {
+      await api<{ comment: CommentCard }>(`/posts/${id}/comments`, {
         method: 'POST',
-        body: JSON.stringify({ body: body.trim(), mediaId }),
+        body: JSON.stringify({
+          body: body.trim(),
+          mediaId,
+          replyToCommentId: replyToCommentId ?? undefined,
+        }),
       });
       setBody('');
       setVoiceBlob(null);
+      setReplyToCommentId(null);
+      setCommentCategory('all');
       await load();
     } catch (err) {
       console.error(err);
@@ -150,8 +169,21 @@ function PostPageInner() {
 
   if (fatal) throw fatal;
   if (loading) return <p className="p-6 text-sm text-[var(--muted)]">Loading.</p>;
-  if (missing) return <p className="p-6 text-sm text-[var(--muted)]">This voice is gone or private.</p>;
+  if (missing)
+    return <p className="p-6 text-sm text-[var(--muted)]">This voice is gone or private.</p>;
   if (!post) return <p className="p-6 text-sm text-[var(--muted)]">Loading.</p>;
+
+  const categoryCounts = countCommentCategories(comments);
+  const shownCategories = COMMENT_CATEGORIES.filter(
+    (category) => (categoryCounts.get(category) ?? 0) > 0,
+  );
+  const visibleComments =
+    commentCategory === 'all'
+      ? comments
+      : comments.filter((comment) => comment.categories.includes(commentCategory));
+  const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
+  const replyTarget = replyToCommentId ? commentsById.get(replyToCommentId) : undefined;
+  const canVoiceReply = Boolean(user);
 
   return (
     <div>
@@ -160,6 +192,22 @@ function PostPageInner() {
       <div className="border-b border-[var(--line)] px-3 py-3">
         {user ? (
           <div className="relative">
+            {replyTarget ? (
+              <div className="mb-2 flex items-center gap-2 rounded-xl bg-[var(--bg)] px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate text-[var(--muted)]">
+                  Replying to{' '}
+                  <strong className="text-[var(--text)]">{replyTarget.author.displayName}</strong>
+                </span>
+                <button
+                  type="button"
+                  aria-label="Cancel reply"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-[var(--card)]"
+                  onClick={() => setReplyToCommentId(null)}
+                >
+                  <X size={17} aria-hidden />
+                </button>
+              </div>
+            ) : null}
             <div className="flex items-center gap-1 rounded-full border border-[var(--line)] bg-[var(--bg)] px-1">
               <button
                 type="button"
@@ -173,10 +221,11 @@ function PostPageInner() {
               <input
                 ref={textRef}
                 className="min-h-11 min-w-0 flex-1 bg-transparent text-base outline-none disabled:text-[var(--muted)]"
-                placeholder="Reply..."
+                placeholder={canVoiceReply ? 'Reply...' : 'Reply (text only)'}
                 value={body}
+                maxLength={MAX_COMMENT_LENGTH}
                 disabled={recording || micBusy || Boolean(voiceBlob)}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={(e) => setBody(e.target.value.slice(0, MAX_COMMENT_LENGTH))}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -184,21 +233,23 @@ function PostPageInner() {
                   }
                 }}
               />
-              <button
-                type="button"
-                aria-label={recording ? 'Stop' : 'Voice'}
-                disabled={micBusy || replyBusy}
-                onClick={() => void toggleMic()}
-                className={`grid h-11 w-11 place-items-center rounded-full disabled:opacity-40 ${recording ? 'text-red-500' : 'text-[var(--text)]'} active:bg-[var(--card)]`}
-              >
-                {micBusy ? (
-                  <Loader2 size={18} className="animate-spin" strokeWidth={2.75} />
-                ) : recording ? (
-                  <Square size={18} strokeWidth={2.75} />
-                ) : (
-                  <Mic size={22} strokeWidth={2.75} />
-                )}
-              </button>
+              {canVoiceReply ? (
+                <button
+                  type="button"
+                  aria-label={recording ? 'Stop' : 'Voice'}
+                  disabled={micBusy || replyBusy}
+                  onClick={() => void toggleMic()}
+                  className={`grid h-11 w-11 place-items-center rounded-full disabled:opacity-40 ${recording ? 'text-red-500' : 'text-[var(--text)]'} active:bg-[var(--card)]`}
+                >
+                  {micBusy ? (
+                    <Loader2 size={18} className="animate-spin" strokeWidth={2.75} />
+                  ) : recording ? (
+                    <Square size={18} strokeWidth={2.75} />
+                  ) : (
+                    <Mic size={22} strokeWidth={2.75} />
+                  )}
+                </button>
+              ) : null}
             </div>
             {stickersOpen ? (
               <div className="absolute bottom-14 left-0 z-20 grid grid-cols-8 gap-1 rounded-2xl border border-[var(--line)] bg-[var(--card)] p-2 shadow-lg">
@@ -216,12 +267,18 @@ function PostPageInner() {
             ) : null}
             <div className="mt-2 flex items-center justify-between gap-2">
               <p className="text-xs font-semibold text-[var(--muted)]">
-                {recording ? 'Recording...' : voiceBlob ? (
-                  <button type="button" className="font-semibold" onClick={() => setVoiceBlob(null)}>
+                {recording ? (
+                  'Recording...'
+                ) : voiceBlob ? (
+                  <button
+                    type="button"
+                    className="font-semibold"
+                    onClick={() => setVoiceBlob(null)}
+                  >
                     Voice ready · Undo
                   </button>
                 ) : (
-                  ''
+                  `${body.length}/${MAX_COMMENT_LENGTH}`
                 )}
               </p>
               <button
@@ -244,40 +301,163 @@ function PostPageInner() {
           </p>
         )}
       </div>
-      <ul>
-        {comments.map((c) => (
-          <li key={c.id} className="flex gap-3 border-b border-[var(--line)] px-4 py-3">
-            <Avatar name={c.author.displayName} src={c.author.avatarUrl} />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold">
-                {c.author.displayName} <span className="font-normal text-[var(--muted)]">@{c.author.handle}</span>
-              </div>
-              {c.body ? <p className="whitespace-pre-wrap text-[15px] leading-6">{c.body}</p> : null}
-              {c.audioUrl ? (
-                <div className="mt-2">
-                  <WaveformPlayer trackId={`c-${c.id}`} src={c.audioUrl} durationMs={c.durationMs ?? 0} />
-                </div>
-              ) : null}
-              <button
-                type="button"
-                className="mt-1 text-xs font-semibold text-[var(--muted)]"
-                onClick={() => {
-                  if (!user) {
-                    router.push(`/login?next=/post/${id}`);
-                    return;
-                  }
-                  void api(`/comments/${c.id}/like`, { method: c.likedByMe ? 'DELETE' : 'POST', body: c.likedByMe ? undefined : '{}' }).then(load);
-                }}
-              >
-                <span className="inline-flex items-center gap-1">
-                  <Heart size={14} strokeWidth={2.75} fill={c.likedByMe ? 'currentColor' : 'none'} />
-                  {c.likeCount}
-                </span>
-              </button>
-            </div>
-          </li>
+      <div
+        role="tablist"
+        aria-label="Comment categories"
+        className="flex gap-1 overflow-x-auto border-b border-[var(--line)] px-3 py-2"
+      >
+        <button
+          id="comment-tab-all"
+          type="button"
+          role="tab"
+          aria-selected={commentCategory === 'all'}
+          aria-controls="comment-category-panel"
+          className={`min-h-10 shrink-0 rounded-full px-4 text-sm font-semibold ${
+            commentCategory === 'all'
+              ? 'bg-accent text-white'
+              : 'bg-[var(--bg)] text-[var(--muted)]'
+          }`}
+          onClick={() => setCommentCategory('all')}
+        >
+          All {comments.length}
+        </button>
+        {shownCategories.map((category) => (
+          <button
+            key={category}
+            id={`comment-tab-${category}`}
+            type="button"
+            role="tab"
+            aria-selected={commentCategory === category}
+            aria-controls="comment-category-panel"
+            className={`min-h-10 shrink-0 rounded-full px-4 text-sm font-semibold ${
+              commentCategory === category
+                ? 'bg-accent text-white'
+                : 'bg-[var(--bg)] text-[var(--muted)]'
+            }`}
+            onClick={() => setCommentCategory(category)}
+          >
+            {commentCategoryLabel(category)} {categoryCounts.get(category)}
+          </button>
         ))}
+      </div>
+      <ul
+        id="comment-category-panel"
+        role="tabpanel"
+        aria-labelledby={`comment-tab-${commentCategory}`}
+      >
+        {visibleComments.map((c) => {
+          const parent = c.replyToCommentId ? commentsById.get(c.replyToCommentId) : undefined;
+          return (
+            <li key={c.id} className="flex gap-3 border-b border-[var(--line)] px-4 py-3">
+              <Avatar name={c.author.displayName} src={c.author.avatarUrl} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold">
+                  {c.author.displayName}{' '}
+                  <span className="font-normal text-[var(--muted)]">@{c.author.handle}</span>
+                </div>
+                {c.replyToCommentId ? (
+                  <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
+                    Replying to {parent ? `@${parent.author.handle}` : 'another comment'}
+                    {parent?.body ? ` · ${parent.body}` : ''}
+                  </p>
+                ) : null}
+                {c.body ? (
+                  <p className="whitespace-pre-wrap text-[15px] leading-6">{c.body}</p>
+                ) : null}
+                {c.audioUrl ? (
+                  <div className="mt-2">
+                    <WaveformPlayer
+                      trackId={`c-${c.id}`}
+                      src={c.audioUrl}
+                      durationMs={c.durationMs ?? 0}
+                    />
+                  </div>
+                ) : null}
+                <div className="mt-1 flex items-center gap-4">
+                  <button
+                    type="button"
+                    className="min-h-9 text-xs font-semibold text-[var(--muted)]"
+                    onClick={() => {
+                      if (!user) {
+                        router.push(`/login?next=/post/${id}`);
+                        return;
+                      }
+                      void api(`/comments/${c.id}/like`, {
+                        method: c.likedByMe ? 'DELETE' : 'POST',
+                        body: c.likedByMe ? undefined : '{}',
+                      }).then(load);
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Heart
+                        size={14}
+                        strokeWidth={2.75}
+                        fill={c.likedByMe ? 'currentColor' : 'none'}
+                      />
+                      {c.likeCount}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex min-h-9 items-center gap-1 text-xs font-semibold text-[var(--muted)]"
+                    onClick={() => {
+                      if (!user) {
+                        router.push(`/login?next=/post/${id}`);
+                        return;
+                      }
+                      setReplyToCommentId(c.id);
+                      textRef.current?.focus();
+                    }}
+                  >
+                    <Reply size={14} aria-hidden />
+                    Reply
+                  </button>
+                  {user?.id !== c.author.id ? (
+                    <button
+                      type="button"
+                      className="min-h-9 text-xs font-semibold text-red-600"
+                      onClick={() => {
+                        if (!user) {
+                          router.push(`/login?next=/post/${id}`);
+                          return;
+                        }
+                        setReportComment(c);
+                      }}
+                    >
+                      Report
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          );
+        })}
       </ul>
+      {reportComment ? (
+        <ReportDialog
+          targetType="comment"
+          targetId={reportComment.id}
+          targetLabel="comment"
+          onClose={() => setReportComment(null)}
+        />
+      ) : null}
     </div>
   );
+}
+
+function countCommentCategories(comments: CommentCard[]) {
+  const counts = new Map<CommentCategory, number>();
+  for (const comment of comments) {
+    for (const category of new Set(comment.categories)) {
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function commentCategoryLabel(category: CommentCategory) {
+  return category
+    .split('_')
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ');
 }

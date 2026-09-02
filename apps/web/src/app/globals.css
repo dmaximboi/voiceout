@@ -76,6 +76,21 @@ select {
   35% { transform: translateY(7px); opacity: 1; }
 }
 
+@keyframes unread-breathe {
+  0%, 100% { transform: scale(0.82); opacity: 0.65; }
+  50% { transform: scale(1.18); opacity: 1; }
+}
+
+.unread-breathe {
+  animation: unread-breathe 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unread-breathe {
+    animation: none;
+  }
+}
+
 .send-bar {
   position: relative;
   height: 2px;

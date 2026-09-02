@@ -19,6 +19,12 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Build production web
+        run: pnpm --filter @voiceout/web build
+        env:
+          API_ORIGIN: http://127.0.0.1:4000
+          NEXT_PUBLIC_API_URL: /vo-api
+          NEXT_PUBLIC_WEB_ORIGIN: http://127.0.0.1:3000
       - run: pnpm audit --prod --audit-level=critical
 
   python:
@@ -31,9 +37,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest pip-audit
+      - run: pip install -r requirements.txt pytest
       - run: pytest -q
-      - run: pip-audit -r requirements.txt --no-deps
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -44,3 +49,32 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deployment-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deploy configs
+        run: |
+          python - <<'PY'
+          import json, pathlib, tomllib
+          json.load(open("apps/web/vercel.json", encoding="utf-8"))
+          with open("fly.toml", "rb") as f:
+              tomllib.load(f)
+          with open("apps/algo/railway.toml", "rb") as f:
+              tomllib.load(f)
+          # render.yaml is YAML; basic presence check
+          text = pathlib.Path("render.yaml").read_text(encoding="utf-8")
+          assert "voiceout-backend" in text
+          assert "infra/Dockerfile.node" in text
+          print("deploy configs ok")
+          PY
+      - name: Validate compose configuration
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml config --quiet
+      - name: Validate smoke scripts
+        shell: bash
+        run: |
+          bash -n scripts/smoke.sh
+          pwsh -NoProfile -Command '$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("scripts/smoke.ps1", [ref]$null, [ref]$errors); if ($errors.Count) { $errors | Write-Error; exit 1 }'

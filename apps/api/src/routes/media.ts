@@ -6,13 +6,14 @@ import {
   MAX_AUDIO_BYTES,
   MAX_AVATAR_BYTES,
   MAX_POST_IMAGE_BYTES,
+  canUseDurationCap,
   isAllowedAudioMime,
   isAllowedAvatarMime,
   matchesUploadMagic,
   uploadIntentSchema,
   type DurationCap,
 } from '@voiceout/shared';
-import { requireAuth, requireCsrf, requireInternal } from '../plugins/auth.js';
+import { requireAuth, requireCsrf, requireInternal, requireVerifiedIdentity } from '../plugins/auth.js';
 import { assertFlag } from '../lib/flags.js';
 import { assertDailyQuota } from '../lib/quota.js';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -38,14 +39,20 @@ export async function mediaRoutes(app: FastifyInstance) {
     assertFlag(app.env, 'KILL_UPLOADS');
     const body = uploadIntentSchema.parse(req.body);
     const imageKind = body.kind === 'avatar' || body.kind === 'post_image';
+    // Avatars can be set right after signup, before email verify.
+    if (body.kind !== 'avatar') requireVerifiedIdentity(req);
     if (imageKind) {
       if (!isAllowedAvatarMime(body.mime)) return reply.code(400).send({ error: 'Bad image type' });
       const maxBytes = body.kind === 'avatar' ? MAX_AVATAR_BYTES : MAX_POST_IMAGE_BYTES;
       if (body.bytes > maxBytes) return reply.code(400).send({ error: 'Image too large' });
     } else {
+      requireVerifiedIdentity(req);
       if (!isAllowedAudioMime(body.mime)) return reply.code(400).send({ error: 'Bad audio type' });
       const cap = body.durationCap as DurationCap | undefined;
       if (!cap || !(cap in MAX_AUDIO_BYTES)) return reply.code(400).send({ error: 'Duration cap required' });
+      if (body.kind === 'post_audio' && !canUseDurationCap(cap, req.authUser!.isStudio)) {
+        return reply.code(403).send({ error: 'Voice studio required for that length', code: 'STUDIO_REQUIRED' });
+      }
       if (body.bytes > MAX_AUDIO_BYTES[cap]) return reply.code(400).send({ error: 'Audio too large for cap' });
     }
     await assertDailyQuota(app.redis, 'upload', req.authUser!.id);
@@ -85,6 +92,7 @@ export async function mediaRoutes(app: FastifyInstance) {
         .where(and(eq(mediaObjects.id, id), eq(mediaObjects.userId, req.authUser!.id)))
         .limit(1);
       if (!media) return reply.code(404).send({ error: 'Not found' });
+      if (media.kind !== 'avatar') requireVerifiedIdentity(req);
       if (media.status !== 'pending') return reply.code(409).send({ error: 'File is locked' });
       const buf = Buffer.isBuffer(req.body)
         ? req.body
@@ -133,9 +141,13 @@ export async function mediaRoutes(app: FastifyInstance) {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('x-frame-options', 'DENY');
     reply.header('content-disposition', `inline; filename="${id}${ext}"`);
+    // Only avatars are world-cacheable. Other media can be owner-only (pending /
+    // unpublished); public caches would leak bytes across users by URL.
     reply.header(
       'cache-control',
-      media.kind === 'avatar' ? 'public, max-age=31536000, immutable' : 'public, max-age=86400',
+      media.kind === 'avatar' && media.status === 'ready'
+        ? 'public, max-age=31536000, immutable'
+        : 'private, no-store',
     );
     const range = parseRange(req.headers.range, bytes.length);
     if (range) {

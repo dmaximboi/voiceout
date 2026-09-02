@@ -15,6 +15,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { Env } from '../env.js';
 import { publicMediaUrl } from './s3.js';
+import { userDirectoryColumns } from './rls.js';
 import { toPublicUser } from './users.js';
 
 export async function hydratePosts(
@@ -31,7 +32,10 @@ export async function hydratePosts(
     ...new Set([...postRows.map((p) => p.mediaId), ...postRows.flatMap((p) => p.imageIds ?? [])]),
   ];
 
-  const authorRows = await db.select().from(users).where(inArray(users.id, authorIds));
+  const authorRows = await db
+    .select(userDirectoryColumns)
+    .from(users)
+    .where(inArray(users.id, authorIds));
   const authorMap = new Map(authorRows.map((u) => [u.id, u]));
 
   const mediaRows = await db.select().from(mediaObjects).where(inArray(mediaObjects.id, mediaIds));
@@ -143,6 +147,8 @@ export async function hydratePosts(
       repostedByMe: myRepostSet.has(p.id),
       voicedByMe: myVoiceSet.has(p.id),
       status: p.status,
+      categories: p.commentCategories ?? {},
+      rankReasons: [],
     });
   }
   return cards;

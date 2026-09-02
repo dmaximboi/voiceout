@@ -45,6 +45,46 @@ export const AVATAR_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const POST_REACTIONS = ['like', 'love', 'haha', 'wow', 'sad', 'angry'] as const;
 export type PostReaction = (typeof POST_REACTIONS)[number];
 
+export const COMMENT_CATEGORIES = [
+  'happy',
+  'sad',
+  'anger',
+  'fear',
+  'surprise',
+  'neutral',
+  'informative',
+  'questioning',
+  'supportive',
+  'critical',
+  'humorous',
+  'agreement',
+  'disagreement',
+  'personal_story',
+  'advice',
+  'spam',
+  'off_topic',
+] as const;
+export type CommentCategory = (typeof COMMENT_CATEGORIES)[number];
+
+export const FEED_FEEDBACK_KINDS = ['not_interested', 'hide_author'] as const;
+export type FeedFeedbackKind = (typeof FEED_FEEDBACK_KINDS)[number];
+
+export const FEED_EVENT_TYPES = [
+  'impression',
+  'seen',
+  'open',
+  'play',
+  'pause',
+  'complete',
+  'skip',
+  'share',
+  'comment',
+  'react',
+  'bookmark',
+  'follow',
+] as const;
+export type FeedEventType = (typeof FEED_EVENT_TYPES)[number];
+
 export const PRESET_STICKERS = [
   { id: 'fire', emoji: '🔥', label: 'Fire' },
   { id: 'heart', emoji: '❤️', label: 'Heart' },

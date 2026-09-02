@@ -13,8 +13,7 @@
     "test": "turbo test",
     "db:migrate": "pnpm --filter @voiceout/db migrate",
     "db:gate": "pnpm --filter @voiceout/db gate",
-    "db:studio": "pnpm --filter @voiceout/db studio",
-    "https": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/https-tunnel.ps1"
+    "db:studio": "pnpm --filter @voiceout/db studio"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

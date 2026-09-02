@@ -47,14 +47,27 @@ function RegisterPageInner() {
     setError(null);
     setBusy(true);
     try {
-      await api('/auth/register', {
+      const created = await api<{ user: MeUser }>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ email, password, handle: handle.toLowerCase(), displayName }),
       });
       clearCsrf();
-      await uploadAvatar(photo);
-      const me = await api<{ user: MeUser }>('/auth/me');
-      applyUser(me.user);
+      applyUser(created.user);
+      try {
+        await uploadAvatar(photo);
+        const me = await api<{ user: MeUser }>('/auth/me');
+        applyUser(me.user);
+      } catch {
+        /* account is live; photo can be set in settings */
+      }
+      try {
+        sessionStorage.setItem(
+          'vo_notice',
+          'Account created. Verify your email in your Gmail (or inbox) to post.',
+        );
+      } catch {
+        /* private mode */
+      }
       router.replace(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not register');
@@ -85,7 +98,7 @@ function RegisterPageInner() {
           <input
             className="sr-only"
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/*"
             onChange={(e) => {
               const f = e.target.files?.[0] ?? null;
               setPhoto(f);
@@ -137,7 +150,7 @@ function RegisterPageInner() {
         <OAuthButtons next={next} />
       </div>
       <LegalLinks className="mt-4" />
-      <p className="mt-3 text-center text-xs text-[var(--muted)]">You can add a photo later.</p>
+      <p className="mt-3 text-center text-xs text-[var(--muted)]">A profile photo helps people recognize you.</p>
       <p className="mt-6 text-sm">
         Already have an account?{' '}
         <Link className="text-accent" href={`/login${next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`}>

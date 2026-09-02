@@ -5,20 +5,22 @@ import {
   mediaObjects,
   postReactions,
   posts,
-  reports,
   shareClicks,
 } from '@voiceout/db';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
+  COMMENT_CATEGORIES,
+  canUseDurationCap,
   createCommentSchema,
   createPostSchema,
   MAX_POST_IMAGES,
   reactSchema,
   reportSchema,
+  type CommentCard,
 } from '@voiceout/shared';
-import { requireAuth, requireCsrf, requireInternal } from '../plugins/auth.js';
+import { requireAuth, requireCsrf, requireInternal, requireVerifiedIdentity } from '../plugins/auth.js';
 import { writeAudit } from '../lib/audit.js';
-import { inferGeo } from '../lib/algo.js';
+import { classifyComment, inferGeo } from '../lib/algo.js';
 import { hydratePosts } from '../lib/hydrate.js';
 import { withIdempotency } from '../lib/idempotency.js';
 import { notify, notifyFollowersOfPost } from '../lib/notify.js';
@@ -26,6 +28,7 @@ import { enqueue } from '../lib/queue.js';
 import { assertDailyQuota } from '../lib/quota.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { publicMediaUrl } from '../lib/s3.js';
+import { submitReport } from '../lib/safety.js';
 import { toPublicUser, deletedPublicUser } from '../lib/users.js';
 import { users } from '@voiceout/db';
 import { z } from 'zod';
@@ -33,6 +36,7 @@ import { z } from 'zod';
 export async function postRoutes(app: FastifyInstance) {
   app.post('/posts', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
     requireAuth(req, reply);
+    requireVerifiedIdentity(req);
     requireCsrf(req);
     return withIdempotency(app.redis, req, reply, async () => {
     const body = createPostSchema.parse(req.body);
@@ -42,6 +46,9 @@ export async function postRoutes(app: FastifyInstance) {
       .where(and(eq(mediaObjects.id, body.mediaId), eq(mediaObjects.userId, req.authUser!.id)))
       .limit(1);
     if (!media || media.kind !== 'post_audio') return reply.code(400).send({ error: 'Invalid media' });
+    if (!canUseDurationCap(body.durationCap, req.authUser!.isStudio)) {
+      return reply.code(403).send({ error: 'Voice studio required for that length', code: 'STUDIO_REQUIRED' });
+    }
     const imageIds = [...new Set(body.imageIds ?? [])].slice(0, MAX_POST_IMAGES);
     if (imageIds.length) {
       const images = await app.db
@@ -221,6 +228,14 @@ export async function postRoutes(app: FastifyInstance) {
         likeCount: likeRow?.n ?? 0,
         likedByMe,
         createdAt: c.createdAt.toISOString(),
+        categories: [c.category, c.secondaryCategory].filter(
+          (category): category is CommentCard['categories'][number] =>
+            Boolean(category) &&
+            COMMENT_CATEGORIES.includes(category as CommentCard['categories'][number]),
+        ),
+        categoryConfidence: c.categoryConfidence,
+        replyToCommentId: c.replyToCommentId,
+        replyToUserId: c.replyToUserId,
       });
     }
     return { comments: out };
@@ -228,11 +243,24 @@ export async function postRoutes(app: FastifyInstance) {
 
   app.post('/posts/:id/comments', { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } }, async (req, reply) => {
     requireAuth(req, reply);
+    requireVerifiedIdentity(req);
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = createCommentSchema.parse(req.body);
     const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!post || post.status !== 'published') return reply.code(404).send({ error: 'Not found' });
+    let replyToUserId: string | null = null;
+    if (body.replyToCommentId) {
+      const [parent] = await app.db
+        .select({ postId: comments.postId, authorId: comments.authorId })
+        .from(comments)
+        .where(eq(comments.id, body.replyToCommentId))
+        .limit(1);
+      if (!parent || parent.postId !== id) {
+        return reply.code(400).send({ error: 'Reply target must belong to this post' });
+      }
+      replyToUserId = parent.authorId;
+    }
     if (body.mediaId) {
       const [media] = await app.db
         .select()
@@ -241,28 +269,73 @@ export async function postRoutes(app: FastifyInstance) {
         .limit(1);
       if (!media || media.kind !== 'comment_audio') return reply.code(400).send({ error: 'Invalid media' });
     }
-    const [comment] = await app.db
-      .insert(comments)
-      .values({
-        postId: id,
-        authorId: req.authUser!.id,
-        body: sanitizeText(body.body ?? ''),
-        mediaId: body.mediaId ?? null,
-        stickerId: body.stickerId ?? null,
-      })
-      .returning();
+    const cleanBody = sanitizeText(body.body ?? '');
+    const classification = await classifyComment(app.env, cleanBody, body.stickerId, req.id);
+    const [comment] = await app.db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(comments)
+        .values({
+          postId: id,
+          authorId: req.authUser!.id,
+          body: cleanBody,
+          mediaId: body.mediaId ?? null,
+          stickerId: body.stickerId ?? null,
+          category: classification.primary,
+          secondaryCategory: classification.secondary,
+          categoryConfidence: classification.confidence,
+          replyToCommentId: body.replyToCommentId ?? null,
+          replyToUserId,
+        })
+        .returning();
+      if (created && classification.primary !== 'neutral') {
+        await tx
+          .update(posts)
+          .set({
+            commentCategories: sql`jsonb_set(
+              ${posts.commentCategories},
+              ARRAY[${classification.primary}]::text[],
+              to_jsonb(COALESCE((${posts.commentCategories}->>${classification.primary})::int, 0) + 1),
+              true
+            )`,
+          })
+          .where(eq(posts.id, id));
+      }
+      return [created];
+    });
     if (!comment) return reply.code(500).send({ error: 'Failed' });
     if (body.mediaId && !app.env.SKIP_MEDIA_PROBE) {
       await app.queues.mediaProbe.add('probe', { mediaId: body.mediaId, commentId: comment.id });
     }
     await notify(app.db, {
-      userId: post.authorId,
+      userId: replyToUserId ?? post.authorId,
       actorId: req.authUser!.id,
       type: 'comment',
       postId: id,
       commentId: comment.id,
     });
-    return { commentId: comment.id };
+    const [author] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+    return {
+      commentId: comment.id,
+      comment: {
+        id: comment.id,
+        author: author ? await toPublicUser(app.db, app.env, app.s3, author) : deletedPublicUser(comment.authorId),
+        body: comment.body,
+        stickerId: comment.stickerId as CommentCard['stickerId'],
+        durationMs: null,
+        audioUrl: comment.mediaId ? publicMediaUrl(comment.mediaId) : null,
+        likeCount: 0,
+        likedByMe: false,
+        createdAt: comment.createdAt.toISOString(),
+        categories: [comment.category, comment.secondaryCategory].filter(
+          (category): category is CommentCard['categories'][number] =>
+            Boolean(category) &&
+            COMMENT_CATEGORIES.includes(category as CommentCard['categories'][number]),
+        ),
+        categoryConfidence: comment.categoryConfidence,
+        replyToCommentId: comment.replyToCommentId,
+        replyToUserId: comment.replyToUserId,
+      } satisfies CommentCard,
+    };
   });
 
   app.post('/comments/:id/like', async (req, reply) => {
@@ -296,14 +369,8 @@ export async function postRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const body = reportSchema.parse(req.body);
-    await app.db.insert(reports).values({
-      reporterId: req.authUser!.id,
-      targetType: body.targetType,
-      targetId: body.targetId,
-      reason: body.reason,
-      details: body.details ?? null,
-    });
-    return { ok: true };
+    await submitReport(app.db, req.authUser!.id, body);
+    return reply.code(202).send({ accepted: true });
   });
 
   app.post('/internal/posts/:id/status', async (req, reply) => {

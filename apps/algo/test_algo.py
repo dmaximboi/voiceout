@@ -1,5 +1,6 @@
-from rank import Candidate, rank_candidates, score_candidate
-from sentiment import mix_entropy, dominant_label, label_text, label_comment, emotion_affinity
+from rank import FACTOR_NAMES, Candidate, rank_candidates, rank_candidates_with_reasons, score_candidate
+from sentiment import LABELS, classify_comment, mix_entropy, dominant_label, label_text, label_comment, emotion_affinity
+from trending import TRENDING_FACTOR_NAMES, TRENDING_FACTOR_WEIGHTS, diversify_trending, score_trending_factors
 from lang import detect_lang, lang_affinity
 from reach import reach_fraction, time_decay, over_reach_cap
 
@@ -197,6 +198,78 @@ def test_comment_emoji_and_sticker():
     assert label_comment("", "laugh") == "happy"
     assert label_comment("so good 😂") == "happy"
     assert label_comment("", "sad") == "sad"
+
+
+def test_full_comment_taxonomy_and_multilabel():
+    assert len(LABELS) == 17
+    assert classify_comment("Why does this happen? According to the study, heat causes it.").primary in {
+        "questioning", "informative"
+    }
+    result = classify_comment("You should stay strong, you got this!")
+    assert result.primary in {"advice", "supportive"}
+    assert result.secondary in {"advice", "supportive", "happy"}
+    assert 0 <= result.confidence <= 1
+    assert classify_comment("Follow me and click the link for free money").primary == "spam"
+
+
+def test_emoji_does_not_dominate_meaningful_text():
+    plain = classify_comment("This is incorrect and misleading because the evidence is flawed")
+    decorated = classify_comment("This is incorrect and misleading because the evidence is flawed 😂😂😂")
+    assert plain.primary == "critical"
+    assert decorated.primary == "critical"
+    assert decorated.scores.get("happy", 0) < decorated.scores["critical"]
+
+
+def test_rank_registry_and_reasons():
+    assert len(FACTOR_NAMES) >= 24
+    candidate = Candidate(
+        post_id="reasoned", author_id="a", caption="prayer and peace", duration_ms=60_000,
+        created_at="2099-01-01T00:00:00+00:00", source="following",
+        replay_count=2, category_affinity=0.8,
+    )
+    ids, reasons = rank_candidates_with_reasons([candidate], ["prayer"], 60_000)
+    assert ids == ["reasoned"]
+    assert 1 <= len(reasons["reasoned"]) <= 3
+    assert all(reason in FACTOR_NAMES for reason in reasons["reasoned"])
+
+
+def test_exploration_ranking_is_deterministic():
+    candidates = [
+        Candidate(post_id=str(i), author_id=str(i), caption="topic", duration_ms=60_000,
+                  created_at="2099-01-01T00:00:00+00:00", source="public", explore=i % 5 == 0)
+        for i in range(20)
+    ]
+    first = rank_candidates(candidates, ["topic"], 60_000)
+    assert first == rank_candidates(candidates, ["topic"], 60_000)
+
+
+def test_trending_registry_and_deterministic_diversity():
+    assert len(TRENDING_FACTOR_NAMES) >= 22
+    scored = [(10.0, "a1"), (9.0, "a2"), (8.0, "b1"), (7.0, "c1")]
+    metadata = {
+        "a1": {"author_id": "a", "category": "happy"},
+        "a2": {"author_id": "a", "category": "happy"},
+        "b1": {"author_id": "b", "category": "informative"},
+        "c1": {"author_id": "c", "category": "questioning"},
+    }
+    first = diversify_trending(scored, metadata)
+    assert first == diversify_trending(scored, metadata)
+    assert first[0] == "a1"
+    assert first[1] != "a2"
+
+
+def test_trending_score_uses_complete_weight_registry():
+    factors = {name: float(index + 1) for index, name in enumerate(TRENDING_FACTOR_NAMES)}
+    expected = sum(TRENDING_FACTOR_WEIGHTS[name] * factors[name] for name in TRENDING_FACTOR_NAMES)
+    assert score_trending_factors(factors) == expected
+    incomplete = dict(factors)
+    incomplete.pop(TRENDING_FACTOR_NAMES[0])
+    try:
+        score_trending_factors(incomplete)
+    except ValueError as error:
+        assert "missing=" in str(error)
+    else:
+        raise AssertionError("incomplete trending registry must fail")
 
 
 def test_laugh_viewer_prefers_happy_comments():

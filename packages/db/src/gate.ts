@@ -52,6 +52,17 @@ await sql.unsafe(
   `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${appUser}`,
 );
 await sql.unsafe(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${appUser}`);
+
+await sql.unsafe(`
+DO $$
+BEGIN
+  IF to_regclass('public.users_directory') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT ON users_directory TO ${appUser}';
+  END IF;
+END
+$$;
+`);
+
 await sql.end();
 
 upsertEnv({
@@ -61,7 +72,9 @@ upsertEnv({
   DATABASE_URL: appUrl,
 });
 
-console.log('database gate ready: app role can only read and write rows, owner URL stays on DATABASE_OWNER_URL');
+console.log(
+  'database gate ready: app role is non-superuser (RLS binds). Keep DATABASE_OWNER_URL for migrations only.',
+);
 
 function ident(name: string) {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {

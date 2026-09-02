@@ -2,11 +2,14 @@
 
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Home, Mic, Search, User } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useProcessing } from '@/lib/useProcessing';
 import { DropBalls, SendBar } from './SendProgress';
+import { useNotifications } from '@/lib/notifications';
+import { hasUnreadNotifications } from '@/lib/safetyState';
+import { SettingsForm } from './SettingsForm';
 
 const DropsList = dynamic(() => import('./DropsList').then((m) => m.DropsList), {
   ssr: false,
@@ -18,9 +21,9 @@ const PeopleSearch = dynamic(() => import('./PeopleSearch').then((m) => m.People
   loading: () => <p className="px-4 py-6 text-sm text-[var(--muted)]">Opening search.</p>,
 });
 
-const SettingsForm = dynamic(() => import('./SettingsForm').then((m) => m.SettingsForm), {
+const SearchHistory = dynamic(() => import('./SearchHistory').then((m) => m.SearchHistory), {
   ssr: false,
-  loading: () => <p className="px-4 py-6 text-sm text-[var(--muted)]">Opening you.</p>,
+  loading: () => <p className="px-4 py-6 text-sm text-[var(--muted)]">Opening search.</p>,
 });
 
 type DockMode = 'idle' | 'drops' | 'search' | 'you';
@@ -38,6 +41,8 @@ export function DockBar({
   const path = usePathname();
   const router = useRouter();
   const { user } = useAuth();
+  const { unreadCount } = useNotifications();
+  const hasUnread = hasUnreadNotifications(unreadCount);
   const sending = useProcessing();
   const [mode, setMode] = useState<DockMode>('idle');
   const [query, setQuery] = useState('');
@@ -46,9 +51,12 @@ export function DockBar({
   const dockRef = useRef<HTMLDivElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const skipClick = useRef(false);
-  const gesture = useRef<{ x: number; y: number; kind: 'bar' | 'search' | 'you' | 'sheet' } | null>(null);
+  const gesture = useRef<{ x: number; y: number; kind: 'bar' | 'search' | 'you' | 'sheet' } | null>(
+    null,
+  );
 
   const open = mode !== 'idle';
+  const onDropsViewed = useCallback(() => undefined, []);
 
   useEffect(() => {
     setMode('idle');
@@ -65,7 +73,12 @@ export function DockBar({
 
   function goHome() {
     setMode('idle');
-    if (path !== '/') router.push('/');
+    if (path === '/') {
+      window.dispatchEvent(new Event('vo:refresh-feed'));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    router.push('/');
   }
 
   function openYou() {
@@ -166,7 +179,11 @@ export function DockBar({
       skipClick.current = true;
       if (g.kind === 'search') setMode('search');
       else openYou();
-    } else if ((g.kind === 'search' || g.kind === 'you') && dragging && Math.hypot(e.clientX - g.x, e.clientY - g.y) > 12) {
+    } else if (
+      (g.kind === 'search' || g.kind === 'you') &&
+      dragging &&
+      Math.hypot(e.clientX - g.x, e.clientY - g.y) > 12
+    ) {
       skipClick.current = true;
     }
   }
@@ -204,8 +221,14 @@ export function DockBar({
             className="max-h-[min(62vh,28rem)] overflow-y-auto overscroll-contain"
             onPointerDown={onSheetDown}
           >
-            {mode === 'drops' ? <DropsList /> : null}
-            {mode === 'search' ? <PeopleSearch query={query} /> : null}
+            {mode === 'drops' ? <DropsList onViewed={onDropsViewed} /> : null}
+            {mode === 'search' ? (
+              query.trim() ? (
+                <PeopleSearch query={query} />
+              ) : (
+                <SearchHistory onSelect={setQuery} />
+              )
+            ) : null}
             {mode === 'you' ? <SettingsForm compact /> : null}
           </div>
         </div>
@@ -232,7 +255,7 @@ export function DockBar({
             ) : (
               <button
                 type="button"
-                aria-label="Drops"
+                aria-label={hasUnread ? `Drops, ${unreadCount} unread` : 'Drops'}
                 aria-expanded={mode === 'drops'}
                 onClick={() => {
                   if (skipClick.current) {
@@ -248,6 +271,7 @@ export function DockBar({
                 }`}
               >
                 {sending ? <DropBalls /> : dropHot ? 'Drop here' : 'Drops'}
+                {hasUnread ? <span className="unread-breathe h-2.5 w-2.5 rounded-full bg-emerald-500" aria-hidden /> : null}
               </button>
             )}
           </div>
@@ -307,7 +331,11 @@ export function DockBar({
           className="pointer-events-none fixed z-50 grid h-11 w-11 place-items-center rounded-full bg-[var(--card)] text-[var(--text)] shadow-lg ring-1 ring-[var(--line)]"
           style={{ left: drag.x - 22, top: drag.y - 22 }}
         >
-          {drag.id === 'search' ? <Search size={22} strokeWidth={2.4} /> : <User size={22} strokeWidth={2.4} />}
+          {drag.id === 'search' ? (
+            <Search size={22} strokeWidth={2.4} />
+          ) : (
+            <User size={22} strokeWidth={2.4} />
+          )}
         </span>
       ) : null}
     </nav>

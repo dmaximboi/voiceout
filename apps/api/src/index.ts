@@ -2,7 +2,7 @@ import { config } from 'dotenv';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
+config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env'), override: true });
 config();
 
 import { createDb } from '@voiceout/db';
