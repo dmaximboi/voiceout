@@ -17,6 +17,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { postPath, postShareUrl } from '@/lib/share';
 import { Avatar } from './AppShell';
+import { DisplayName } from './DisplayName';
 import { ReportDialog } from './ReportDialog';
 import { WaveformPlayer } from './WaveformPlayer';
 import { emitFeedEvent } from '@/lib/feedEvents';
@@ -291,13 +292,22 @@ export function FeedCard({
           <div className="flex min-w-0 items-start gap-2">
             <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0">
               {demo ? (
-                <span className="max-w-full truncate font-semibold">{post.author.displayName}</span>
+                <DisplayName
+                  name={post.author.displayName}
+                  planBadge={post.author.planBadge}
+                  nameAccent={post.author.nameAccent}
+                  className="max-w-full font-semibold"
+                />
               ) : (
                 <Link
                   href={`/u/${post.author.handle}`}
-                  className="max-w-full truncate font-semibold active:opacity-80"
+                  className="max-w-full font-semibold active:opacity-80"
                 >
-                  {post.author.displayName}
+                  <DisplayName
+                    name={post.author.displayName}
+                    planBadge={post.author.planBadge}
+                    nameAccent={post.author.nameAccent}
+                  />
                 </Link>
               )}
               <span className="max-w-[40%] truncate text-sm text-[var(--muted)]">

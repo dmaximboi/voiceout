@@ -7,6 +7,7 @@ import { MoreHorizontal } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Avatar } from '@/components/AppShell';
+import { DisplayName } from '@/components/DisplayName';
 import { FeedCard } from '@/components/FeedCard';
 import { ReportDialog } from '@/components/ReportDialog';
 
@@ -140,7 +141,13 @@ export default function ProfilePage() {
             </div>
           ) : null}
         </div>
-        <h1 className="mt-3 text-xl font-bold">{profile.displayName}</h1>
+        <h1 className="mt-3 text-xl font-bold">
+          <DisplayName
+            name={profile.displayName}
+            planBadge={profile.planBadge}
+            nameAccent={profile.nameAccent}
+          />
+        </h1>
         <p className="text-[var(--muted)]">@{profile.handle}</p>
         {profile.bio ? <p className="mt-2 text-sm">{profile.bio}</p> : null}
         <p className="mt-3 text-sm">
