@@ -73,6 +73,11 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     if (range) headers.set('range', range);
     const idem = req.headers.get('idempotency-key');
     if (idem) headers.set('idempotency-key', idem);
+    // Bachs (and similar) webhooks need signature headers intact.
+    for (const name of ['x-bachs-signature', 'x-bachs-timestamp', 'x-webhook-signature', 'x-webhook-timestamp']) {
+      const value = req.headers.get(name);
+      if (value) headers.set(name, value);
+    }
     const auth = req.headers.get('authorization');
     if (auth && path[0] !== 'internal' && path[0] !== 'admin') headers.set('authorization', auth);
     headers.set('x-request-id', req.headers.get('x-request-id') ?? crypto.randomUUID());

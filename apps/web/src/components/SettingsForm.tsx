@@ -67,38 +67,57 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
     const studio = searchParams.get('studio');
     if (studio === 'cancel') {
       setSubNote('Checkout canceled.');
+      router.replace('/settings', { scroll: false });
       return;
     }
     if (studio !== 'ok') return;
     let cancelled = false;
+    const checkoutId = searchParams.get('checkout_id') ?? undefined;
     setSubNote('Confirming payment…');
     void (async () => {
-      try {
-        const checkoutId = searchParams.get('checkout_id') ?? undefined;
-        const result = await api<{ ok: boolean; isStudio?: boolean }>(
-          '/billing/studio/confirm',
-          {
-            method: 'POST',
-            body: JSON.stringify(checkoutId ? { checkoutId } : {}),
-          },
-        );
+      const delays = [0, 2000, 4000, 8000];
+      for (let i = 0; i < delays.length; i++) {
+        if (delays[i]! > 0) await new Promise((r) => setTimeout(r, delays[i]!));
         if (cancelled) return;
-        await refresh();
-        setSubNote(
-          result.ok || result.isStudio
-            ? 'Payment confirmed. Voice studio is active.'
-            : 'Payment is still processing. Refresh in a moment.',
-        );
-      } catch (err) {
-        if (cancelled) return;
-        setSubNote(err instanceof Error ? err.message : 'Could not confirm payment yet. Refresh shortly.');
-        void refresh();
+        try {
+          const result = await api<{ ok: boolean; isStudio?: boolean }>(
+            '/billing/studio/confirm',
+            {
+              method: 'POST',
+              body: JSON.stringify(checkoutId ? { checkoutId } : {}),
+            },
+          );
+          if (cancelled) return;
+          if (result.ok || result.isStudio) {
+            await refresh();
+            setSubNote('Payment confirmed. Voice studio is active.');
+            router.replace('/settings', { scroll: false });
+            return;
+          }
+          setSubNote('Payment is still processing…');
+        } catch (err) {
+          if (cancelled) return;
+          if (i === delays.length - 1) {
+            setSubNote(
+              err instanceof Error
+                ? `${err.message} Refresh shortly, or wait for the webhook.`
+                : 'Could not confirm payment yet. Refresh shortly.',
+            );
+            void refresh();
+            router.replace('/settings', { scroll: false });
+            return;
+          }
+        }
+      }
+      if (!cancelled) {
+        setSubNote('Payment is still processing. Refresh in a moment.');
+        router.replace('/settings', { scroll: false });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [searchParams, refresh]);
+  }, [searchParams, refresh, router]);
 
   async function startStudioCheckout() {
     setSubBusy(true);

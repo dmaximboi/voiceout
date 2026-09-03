@@ -5,7 +5,7 @@
 | `apps/web` | **Vercel** | `apps/web/vercel.json` |
 | `apps/api` | **Fly.io** | `fly.toml` + `infra/Dockerfile.node` |
 | `apps/backend` | **Render** | `render.yaml` + `infra/Dockerfile.node` |
-| `apps/algo` | **Railway** | `apps/algo/railway.toml` + `apps/algo/Dockerfile` |
+| `apps/algo` | **Fly.io** | `apps/algo/fly.toml` + `apps/algo/Dockerfile` |
 | Postgres | **Neon** | already migrated + gated |
 | Redis | **Upstash** | `REDIS_URL` |
 | Media | **Cloudflare R2** | `S3_*` |
@@ -18,18 +18,22 @@ Secrets live in host dashboards (and local gitignored `.env.production.local`). 
 In `.env.production.local` you still need:
 
 1. `S3_ACCESS_KEY` + `S3_SECRET_KEY` — [R2 API tokens](https://dash.cloudflare.com/?to=/:account/r2/overview)
-2. `ALGO_URL` — after Railway algo is live
+2. `ALGO_URL` — after Fly algo is live (`https://voiceout-algo.fly.dev`)
 3. Confirm `API_ORIGIN=https://api.voiceout.xyz` after Fly DNS
 
 R2: bucket `voiceout`, region `auto`, account endpoint already in the pack (`*.r2.cloudflarestorage.com`).
 
-## 2) Railway — algo
+## 2) Fly — algo
 
-1. [railway.app](https://railway.app) → New project → Deploy from GitHub  
-2. Root directory: `apps/algo` (or use `apps/algo/railway.toml` from monorepo root)  
-3. Env: `ALGO_SERVICE_TOKEN` (same as API pack)  
-4. Optional: `S3_ENDPOINT` so whisper allowlist trusts R2 hosts  
-5. Copy public URL → set `ALGO_URL` on API + backend  
+```bash
+cd apps/algo
+fly apps create voiceout-algo
+fly secrets set ALGO_SERVICE_TOKEN=<same as API> --app voiceout-algo
+fly deploy
+fly secrets set ALGO_URL=https://voiceout-algo.fly.dev --app voiceout-api
+```
+
+Optional: `S3_ENDPOINT` so whisper allowlist trusts R2 hosts.
 
 ## 3) Fly — API
 
@@ -74,7 +78,9 @@ Browser calls same-origin `/vo-api/*`; Next proxies to Fly. That is intentional 
 | TikTok | production redirect `https://voiceout.xyz/auth/tiktok/callback` |
 | Telegram | `/setdomain` `voiceout.xyz` |
 | Resend | verify domain `voiceout.xyz` |
-| Bachs | webhook `https://voiceout.xyz/vo-api/billing/webhooks/bachs` |
+| Bachs | webhook **prefer** `https://api.voiceout.xyz/billing/webhooks/bachs` (also works via `https://voiceout.xyz/vo-api/billing/webhooks/bachs`) |
+
+Payments live on the **API** (`apps/api` billing routes). Do **not** deploy `apps/payments` — it is a stub.
 
 ## 7) Smoke
 

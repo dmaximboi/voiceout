@@ -49,7 +49,8 @@ export async function billingRoutes(app: FastifyInstance) {
       priceLabel: STUDIO_PRICE_LABEL,
       isStudio: req.authUser!.isStudio,
       checkoutReady: bachsConfigured(app.env),
-      webhookPath: '/vo-api/billing/webhooks/bachs',
+      webhookPath: '/billing/webhooks/bachs',
+      webhookUrlHint: 'https://api.voiceout.xyz/billing/webhooks/bachs',
       webhookNeedsHttps: true,
     };
   });
@@ -112,7 +113,7 @@ export async function billingRoutes(app: FastifyInstance) {
   /** After Bachs redirects back. Polls Bachs so localhost HTTP webhooks are not required. */
   app.post(
     '/billing/studio/confirm',
-    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } },
     async (req, reply) => {
       requireAuth(req, reply);
       requireCsrf(req);

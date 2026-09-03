@@ -25,7 +25,11 @@ const env = z
       .transform((v) => v === 'true' || v === '1'),
     BACKEND_PORT: z.coerce.number().default(4001),
   })
-  .parse(process.env);
+  .parse({
+    ...process.env,
+    // Render/Fly inject PORT; prefer it over BACKEND_PORT so health checks hit the right port.
+    BACKEND_PORT: process.env.PORT || process.env.BACKEND_PORT || '4001',
+  });
 
 assertFfprobePath(env.FFPROBE_PATH);
 

@@ -94,7 +94,8 @@ export async function buildApp(opts: {
         path === '/health' ||
         path === '/auth/csrf' ||
         path === '/auth/me' ||
-        path === '/auth/refresh'
+        path === '/auth/refresh' ||
+        path === '/billing/webhooks/bachs'
       );
     },
     keyGenerator: (req) => {

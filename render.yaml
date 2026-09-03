@@ -1,5 +1,6 @@
 # VoiceOut backend workers → Render
-# Connect this repo in Render Dashboard → Blueprint, or create a Docker worker manually.
+# Connect this repo in Render Dashboard → Blueprint, or create a Docker web service manually.
+# Root Directory: leave EMPTY (repo root). Do not put "apps/backend" or command fragments there.
 
 services:
   - type: web
@@ -7,7 +8,8 @@ services:
     runtime: docker
     plan: starter
     dockerfilePath: ./infra/Dockerfile.node
-    dockerCommand: sh -c "BACKEND_PORT=${PORT:-4001} pnpm --filter @voiceout/backend start"
+    # Render UI only allows [A-Za-z0-9-_./ ] — no $, {}, ", or @
+    dockerCommand: pnpm --dir apps/backend start
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
