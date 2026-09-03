@@ -10,6 +10,7 @@ coverage
 .env.*.local
 .env.production
 .env.production.local
+fly-secrets.env
 detail.md
 details.md
 secrets.md
