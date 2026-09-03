@@ -9,15 +9,15 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <LegalArticle title="Terms of Use" updated="28 August 2026">
+    <LegalArticle title="Terms of Use" updated="3 September 2026">
       <p>
         By creating an account or using VoiceOut, you agree to these terms. VoiceOut is a voice-first social
-        app for short voice notes, photos on posts, follows, and replies.
+        app for short voice notes, photos on posts, follows, and replies. The live service is at voiceout.xyz.
       </p>
       <h2 className="pt-2 text-lg font-semibold">Accounts</h2>
       <p>
-        You may sign in with a supported identity provider or with email if that option is enabled. You are
-        responsible for activity on your account. One person should not impersonate another.
+        You may sign in with email and password, Google, or Telegram. You are responsible for activity on your
+        account. One person should not impersonate another.
       </p>
       <h2 className="pt-2 text-lg font-semibold">Your content</h2>
       <p>
@@ -39,8 +39,9 @@ export default function TermsPage() {
       <p>We may remove content or suspend accounts that break these rules.</p>
       <h2 className="pt-2 text-lg font-semibold">Sign-in providers</h2>
       <p>
-        If you sign in with a third party, their own terms also apply. We only use that sign-in to identify
-        you on VoiceOut. We do not publish to those services for you.
+        If you sign in with Google or Telegram, their own terms also apply. We only use that sign-in to
+        identify you on VoiceOut. We do not publish to those services for you. Email sign-in requires a
+        password you choose and, when enabled, email verification.
       </p>
       <h2 className="pt-2 text-lg font-semibold">Availability</h2>
       <p>
@@ -60,7 +61,7 @@ export default function TermsPage() {
         <Link href="/privacy" className="text-accent">
           Privacy Policy
         </Link>
-        . For other questions, use Settings after you sign in, or contact the operator of this VoiceOut site.
+        . For other questions, use Settings after you sign in, or contact the operator of voiceout.xyz.
       </p>
     </LegalArticle>
   );

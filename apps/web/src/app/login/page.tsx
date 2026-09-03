@@ -40,7 +40,11 @@ function LoginPageInner() {
   }, [user, loading, router, next]);
 
   useEffect(() => {
-    if (params.get('error') === 'oauth') setError('Sign-in failed. Try again.');
+    const err = params.get('error');
+    if (err === 'oauth') setError('Sign-in failed. Try again.');
+    if (err === 'email_unverified') {
+      setError('That email is already registered but not verified. Log in with email/password, verify, then link Google.');
+    }
   }, [params]);
 
   useEffect(() => {
