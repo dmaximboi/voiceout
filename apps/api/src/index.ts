@@ -13,6 +13,10 @@ import { createS3 } from './lib/s3.js';
 import { createQueues } from './lib/queue.js';
 
 const env = loadEnv();
+// Fly http_service.internal_port is 4000; prefer that over a host-injected PORT.
+if (process.env.FLY_APP_NAME) {
+  env.API_PORT = 4000;
+}
 const db = createDb(env.DATABASE_URL);
 const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: 2,
