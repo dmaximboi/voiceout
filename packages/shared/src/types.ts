@@ -6,6 +6,7 @@ import type {
   PostReaction,
   StickerId,
 } from './constants.js';
+import type { PlanBadge, PlanTier } from './plan.js';
 
 export type PublicUser = {
   id: string;
@@ -16,6 +17,8 @@ export type PublicUser = {
   followerCount: number;
   followingCount: number;
   createdAt: string;
+  planBadge: PlanBadge;
+  nameAccent: boolean;
 };
 
 export type MeUser = PublicUser & {
@@ -26,7 +29,11 @@ export type MeUser = PublicUser & {
   phone: string | null;
   role: 'user' | 'moderator' | 'admin';
   hasPassword: boolean;
+  planTier: PlanTier | null;
+  planUntil: string | null;
+  /** @deprecated use planTier */
   isStudio: boolean;
+  /** @deprecated use planUntil */
   studioUntil: string | null;
   nameChangeAvailableAt: string;
   passwordChangeAvailableAt: string;
@@ -124,6 +131,7 @@ export type ReportSubmission = {
   targetId: string;
   reason: 'spam' | 'abuse' | 'illegal' | 'other';
   details?: string;
+  alsoBlock?: boolean;
 };
 export type ReportSubmissionResult = { accepted: true };
 export type BugFeedbackSubmission = { description: string; screenshotMediaId?: string | null };

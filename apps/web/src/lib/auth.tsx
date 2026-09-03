@@ -54,33 +54,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void refresh();
   }, []);
 
+  // Soft refresh when the tab becomes visible again so a stale access JWT
+  // is renewed via /auth/refresh before the next mutation.
   useEffect(() => {
-    if (!user) return;
-    const idleMs = 30 * 60 * 1000;
-    let timer: ReturnType<typeof setTimeout>;
-    const bump = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        void (async () => {
-          try {
-            await api('/auth/logout', { method: 'POST', body: '{}' });
-          } catch (err) {
-            console.error(err);
-          } finally {
-            clearCsrf();
-            setUser(null);
-          }
-        })();
-      }, idleMs);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && userRef.current) void refresh();
     };
-    bump();
-    const events = ['mousemove', 'keydown', 'pointerdown', 'touchstart', 'visibilitychange'] as const;
-    for (const ev of events) window.addEventListener(ev, bump, { passive: true });
-    return () => {
-      clearTimeout(timer);
-      for (const ev of events) window.removeEventListener(ev, bump);
-    };
-  }, [user]);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   const value = useMemo<AuthCtx>(
     () => ({

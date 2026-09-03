@@ -10,8 +10,8 @@ import {
 import { COMMENT_CATEGORIES, DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
 import { nameChangeAvailableAt, passwordChangeAvailableAt } from './cooldowns';
 import { isPrivateAdminRequest, isPrivateHost, isPrivateIp } from './lan';
-import { matchesUploadMagic } from './magic';
-import { canUseDurationCap, isStudioActive } from './plan';
+import { matchesUploadMagic, sniffUploadMime } from './magic';
+import { canUseDurationCap, isPlanActive, activePlanTier } from './plan';
 
 describe('handleSchema', () => {
   it('accepts valid handles', () => {
@@ -44,15 +44,19 @@ describe('caps', () => {
   });
 });
 
-describe('studio plan', () => {
-  it('keeps 5m and 15m behind studio', () => {
-    expect(canUseDurationCap(60, false)).toBe(true);
-    expect(canUseDurationCap(120, false)).toBe(true);
-    expect(canUseDurationCap(300, false)).toBe(false);
-    expect(canUseDurationCap(900, false)).toBe(false);
-    expect(canUseDurationCap(900, true)).toBe(true);
-    expect(isStudioActive(null)).toBe(false);
-    expect(isStudioActive(new Date(Date.now() + 60_000))).toBe(true);
+describe('plan tiers', () => {
+  it('gates duration caps by tier', () => {
+    expect(canUseDurationCap(60, null)).toBe(true);
+    expect(canUseDurationCap(120, null)).toBe(true);
+    expect(canUseDurationCap(300, null)).toBe(false);
+    expect(canUseDurationCap(300, 'basic')).toBe(true);
+    expect(canUseDurationCap(900, 'basic')).toBe(false);
+    expect(canUseDurationCap(900, 'verified')).toBe(true);
+    expect(canUseDurationCap(1800, 'gold')).toBe(true);
+    expect(isPlanActive(null)).toBe(false);
+    expect(isPlanActive(new Date(Date.now() + 60_000))).toBe(true);
+    expect(activePlanTier('verified', new Date(Date.now() + 60_000))).toBe('verified');
+    expect(activePlanTier('verified', null)).toBe(null);
   });
 });
 
@@ -99,6 +103,11 @@ describe('upload magic', () => {
     jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
     expect(matchesUploadMagic('audio/ogg', jpeg)).toBe(false);
     expect(matchesUploadMagic('image/jpeg', jpeg)).toBe(true);
+  });
+  it('sniffs blank mime from magic', () => {
+    const jpeg = new Uint8Array(32);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+    expect(sniffUploadMime(jpeg)).toBe('image/jpeg');
   });
 });
 

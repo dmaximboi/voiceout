@@ -1,7 +1,7 @@
 {
   "name": "VoiceOut",
   "short_name": "VoiceOut",
-  "description": "Voice-first social feed",
+  "description": "Voice-first social network for short voice posts and replies.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#eef5fb",

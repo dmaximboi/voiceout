@@ -18,9 +18,16 @@ export function buildReportPayload(
   targetId: string,
   reason: ReportSubmission['reason'],
   details: string,
+  alsoBlock?: boolean,
 ): ReportSubmission {
   const cleanDetails = details.trim();
-  return { targetType, targetId, reason, ...(cleanDetails ? { details: cleanDetails } : {}) };
+  return {
+    targetType,
+    targetId,
+    reason,
+    ...(cleanDetails ? { details: cleanDetails } : {}),
+    ...(alsoBlock ? { alsoBlock: true } : {}),
+  };
 }
 
 export function restoreRemovedPosts<T extends { id: string }>(

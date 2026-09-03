@@ -1,6 +1,7 @@
+import type { PlanTier } from '@voiceout/shared';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Env } from '../env.js';
-import { STUDIO_PRICE_CENTS } from '@voiceout/shared';
+import { PLAN_DEFINITIONS, type PlanTier as Tier } from '@voiceout/shared';
 
 export function bachsApiBase(env: Env) {
   if (env.BACHS_API_BASE.trim()) return env.BACHS_API_BASE.replace(/\/$/, '');
@@ -46,8 +47,8 @@ export function bachsCheckoutPaid(session: { status?: string; payment_status?: s
   );
 }
 
-export function studioPriceAmount() {
-  return (STUDIO_PRICE_CENTS / 100).toFixed(2);
+export function planPriceAmount(tier: Tier) {
+  return (PLAN_DEFINITIONS[tier].priceCents / 100).toFixed(2);
 }
 
 export async function createBachsCheckout(
@@ -56,6 +57,7 @@ export async function createBachsCheckout(
     email: string;
     name: string;
     userId: string;
+    tier: PlanTier;
     successUrl: string;
     cancelUrl: string;
     reference: string;
@@ -66,13 +68,19 @@ export async function createBachsCheckout(
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
     reference: input.reference.slice(0, 128),
-    metadata: { user_id: input.userId, purpose: 'studio' },
+    metadata: { user_id: input.userId, purpose: `plan_${input.tier}`, plan_tier: input.tier },
     expires_in_minutes: 60,
+    pricing: { currency: 'USD', amount: planPriceAmount(input.tier) },
   };
-  if (env.BACHS_STUDIO_PRODUCT_ID.trim()) {
-    body.product_cart = [{ product_id: env.BACHS_STUDIO_PRODUCT_ID.trim(), quantity: 1 }];
-  } else {
-    body.pricing = { currency: 'USD', amount: studioPriceAmount() };
+  const productEnvKey =
+    input.tier === 'basic'
+      ? env.BACHS_STUDIO_PRODUCT_ID
+      : input.tier === 'verified'
+        ? env.BACHS_VERIFIED_PRODUCT_ID
+        : env.BACHS_GOLD_PRODUCT_ID;
+  if (productEnvKey.trim()) {
+    body.product_cart = [{ product_id: productEnvKey.trim(), quantity: 1 }];
+    delete body.pricing;
   }
 
   const res = await fetch(`${bachsApiBase(env)}/v1/checkout-sessions`, {

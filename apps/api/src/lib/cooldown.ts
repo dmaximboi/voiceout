@@ -5,7 +5,7 @@ import {
   passwordChangeAvailableAt,
   NAME_CHANGE_MS,
   PASSWORD_CHANGE_MS,
-  isStudioActive,
+  activePlanTier,
 } from '@voiceout/shared';
 import { httpError } from './http.js';
 import { toPublicUser } from './users.js';
@@ -40,6 +40,8 @@ export async function toMeUser(
   user: UserRow,
 ) {
   const placeholderEmail = user.email.endsWith('@users.invalid');
+  const tier = activePlanTier(user.planTier, user.studioUntil);
+  const until = user.studioUntil?.toISOString() ?? null;
   return {
     ...(await toPublicUser(db, env, s3, user)),
     email: user.email,
@@ -49,8 +51,10 @@ export async function toMeUser(
     phone: user.phone ?? null,
     role: user.role,
     hasPassword: Boolean(user.passwordHash),
-    isStudio: isStudioActive(user.studioUntil),
-    studioUntil: user.studioUntil?.toISOString() ?? null,
+    planTier: tier,
+    planUntil: until,
+    isStudio: Boolean(tier),
+    studioUntil: until,
     ...profileLocks(user),
   };
 }

@@ -71,6 +71,7 @@ export const users = pgTable(
     profileNameChangedAt: timestamp('profile_name_changed_at', { withTimezone: true }),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
     studioUntil: timestamp('studio_until', { withTimezone: true }),
+    planTier: varchar('plan_tier', { length: 16 }),
     adminDeviceHash: varchar('admin_device_hash', { length: 64 }),
     phone: varchar('phone', { length: 32 }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),

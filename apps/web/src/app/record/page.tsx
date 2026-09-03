@@ -2,10 +2,11 @@
 
 import {
   DURATION_CAP_LABELS,
-  DURATION_CAPS,
   FREE_DURATION_CAPS,
   MAX_POST_IMAGES,
+  allowedDurationCaps,
   canUseDurationCap,
+  maxCaptionLength,
   type DurationCap,
 } from '@voiceout/shared';
 import { ImagePlus, Loader2, Mic, Pause, Play, Square, Trash2, X } from 'lucide-react';
@@ -14,6 +15,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { api, uploadAudio, uploadPostImage } from '@/lib/api';
 import { useRequireAuth } from '@/lib/auth';
 import { startOpusRecording, warmupOpus, type OpusHandle } from '@/lib/recordOpus';
+import { clearRecordDraft, loadRecordDraft, saveRecordDraft } from '@/lib/recordDraft';
 import { usePlayer } from '@/lib/player';
 import { WaveformPlayer } from '@/components/WaveformPlayer';
 import { VoiceStudio } from '@/components/VoiceStudio';
@@ -33,10 +35,10 @@ function RecordPageInner() {
   const { pause: pausePlayback } = usePlayer();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const studioPlan = Boolean(user?.isStudio);
-  const caps = studioPlan ? DURATION_CAPS : FREE_DURATION_CAPS;
+  const planTier = user?.planTier ?? null;
+  const caps = planTier ? allowedDurationCaps(planTier) : FREE_DURATION_CAPS;
   const [cap, setCap] = useState<DurationCap>(60);
-  const [caption, setCaption] = useState(() => searchParams.get('caption')?.slice(0, 500) ?? '');
+  const [caption, setCaption] = useState(() => searchParams.get('caption')?.slice(0, 1000) ?? '');
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [blob, setBlob] = useState<Blob | null>(null);
@@ -47,6 +49,7 @@ function RecordPageInner() {
   const [levels, setLevels] = useState<number[]>(() => Array(24).fill(0.12));
   const [images, setImages] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [draftReady, setDraftReady] = useState(false);
   const recRef = useRef<OpusHandle | null>(null);
   const timer = useRef<number | null>(null);
   const capRef = useRef(cap);
@@ -68,8 +71,71 @@ function RecordPageInner() {
   }, [pausePlayback]);
 
   useEffect(() => {
-    setCap((current) => (canUseDurationCap(current, studioPlan) ? current : 60));
-  }, [studioPlan]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const draft = await loadRecordDraft();
+        if (cancelled || !draft) return;
+        const audio = new Blob([draft.audio], { type: draft.audioMime || 'audio/ogg' });
+        const restoredImages = draft.images.map(
+          (img) => new File([img.buffer], img.name || 'photo.jpg', { type: img.type || 'image/jpeg' }),
+        );
+        setBlob(audio);
+        setPreviewBlob(audio);
+        setPreviewUrl(URL.createObjectURL(audio));
+        setDurationMs(draft.durationMs);
+        setElapsed(draft.durationMs);
+        setCap(draft.durationCap as DurationCap);
+        if (!searchParams.get('caption')) setCaption(draft.caption);
+        setImages(restoredImages);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setDraftReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!draftReady || phase !== 'idle') return;
+    const audio = previewBlob || blob;
+    if (!audio) {
+      void clearRecordDraft().catch(() => undefined);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const imagePayload = await Promise.all(
+            images.map(async (file) => ({
+              name: file.name,
+              type: file.type || 'image/jpeg',
+              buffer: await file.arrayBuffer(),
+            })),
+          );
+          await saveRecordDraft({
+            caption,
+            durationMs,
+            durationCap: cap,
+            audio: await audio.arrayBuffer(),
+            audioMime: audio.type || 'audio/ogg',
+            images: imagePayload,
+            savedAt: Date.now(),
+          });
+        } catch (err) {
+          console.error(err);
+        }
+      })();
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draftReady, phase, blob, previewBlob, caption, durationMs, cap, images]);
+
+  useEffect(() => {
+    setCap((current) => (canUseDurationCap(current, planTier) ? current : 60));
+  }, [planTier]);
 
   useEffect(() => {
     const urls = images.map((file) => URL.createObjectURL(file));
@@ -187,9 +253,12 @@ function RecordPageInner() {
       discardRef.current = true;
       stop();
       clearTake();
+      void clearRecordDraft().catch(() => undefined);
       return;
     }
     clearTake();
+    setImages([]);
+    void clearRecordDraft().catch(() => undefined);
   }
 
   async function publish() {
@@ -219,6 +288,7 @@ function RecordPageInner() {
           transcript: transcriptRef.current || undefined,
         }),
       });
+      await clearRecordDraft().catch(() => undefined);
       router.push(`/post/${created.post.id}`);
     } catch (err) {
       setPhase('idle');
@@ -341,7 +411,7 @@ function RecordPageInner() {
       <textarea
         className="mt-6 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-base"
         rows={3}
-        maxLength={500}
+        maxLength={maxCaptionLength(planTier)}
         placeholder="Add a caption"
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
@@ -373,11 +443,17 @@ function RecordPageInner() {
             Photo
             <input
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
               className="sr-only"
               disabled={phase === 'posting'}
               onChange={(e) => {
-                const picked = Array.from(e.target.files ?? []).filter((file) => file.type.startsWith('image/'));
+                const picked = Array.from(e.target.files ?? []).filter((file) => {
+                  const t = (file.type || '').toLowerCase();
+                  return !t || t.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name);
+                });
+                if ((e.target.files?.length ?? 0) > 0 && picked.length === 0) {
+                  setError('Use a JPEG, PNG, or WebP photo');
+                }
                 setImages((cur) => [...cur, ...picked].slice(0, MAX_POST_IMAGES));
                 e.target.value = '';
               }}

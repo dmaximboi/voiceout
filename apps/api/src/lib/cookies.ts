@@ -36,7 +36,7 @@ export function setAuthCookies(
   opts?: { secure?: boolean },
 ) {
   const base = cookieBase(env, opts?.secure);
-  reply.setCookie(ACCESS, access, { ...base, maxAge: 60 * 15 });
+  reply.setCookie(ACCESS, access, { ...base, maxAge: 60 * 60 });
   reply.setCookie(REFRESH, refresh, { ...base, maxAge: 60 * 60 * 24 * 7 });
   setCsrfCookie(reply, env, csrf, opts);
 }

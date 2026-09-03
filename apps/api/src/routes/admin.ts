@@ -176,7 +176,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!target) return reply.code(404).send({ error: 'Not found' });
     const base = target.studioUntil && target.studioUntil.getTime() > Date.now() ? target.studioUntil.getTime() : Date.now();
     const until = new Date(base + body.days * 24 * 60 * 60 * 1000);
-    await app.db.update(users).set({ studioUntil: until, updatedAt: new Date() }).where(eq(users.id, id));
+    await app.db.update(users).set({ studioUntil: until, planTier: 'gold', updatedAt: new Date() }).where(eq(users.id, id));
     await writeAudit(app.db, req, 'studio_granted', req.authUser!.id, { targetUserId: id, days: body.days });
     return { ok: true, studioUntil: until.toISOString() };
   });
@@ -188,7 +188,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const [target] = await app.db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
     if (!target) return reply.code(404).send({ error: 'Not found' });
-    await app.db.update(users).set({ studioUntil: null, updatedAt: new Date() }).where(eq(users.id, id));
+    await app.db.update(users).set({ studioUntil: null, planTier: null, updatedAt: new Date() }).where(eq(users.id, id));
     await writeAudit(app.db, req, 'studio_revoked', req.authUser!.id, { targetUserId: id });
     return { ok: true };
   });

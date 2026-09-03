@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { applyVoiceStudio, DEFAULT_STUDIO, type StudioSettings } from '@/lib/voiceStudio';
 
-/** Lightweight free studio: trim + boost only (keeps Opus size moderate). */
+/** Lightweight free studio: trim + boost; collapsed by default. */
 export function VoiceStudio({
   sourceBlob,
   disabled,
@@ -13,6 +14,7 @@ export function VoiceStudio({
   disabled: boolean;
   onApply: (blob: Blob, durationMs: number) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,24 +49,36 @@ export function VoiceStudio({
   }
 
   return (
-    <div className="mt-4 space-y-3 rounded-2xl border border-[var(--line)] p-4">
-      <p className="text-sm font-semibold">Voice studio</p>
-      <Range label="Trim start" value={settings.trimStart} onChange={(v) => patch({ trimStart: v })} />
-      <Range
-        label="Trim end"
-        value={settings.trimEnd}
-        onChange={(v) => patch({ trimEnd: Math.max(v, settings.trimStart + 0.02) })}
-      />
-      <Range label="Boost" value={settings.boost} onChange={(v) => patch({ boost: v })} />
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+    <div className="mt-4 rounded-2xl border border-[var(--line)]">
       <button
         type="button"
-        className="min-h-11 w-full rounded-full border border-[var(--line)] text-sm font-semibold disabled:opacity-50"
-        disabled={disabled || busy || !sourceBlob}
-        onClick={() => void run()}
+        className="flex min-h-11 w-full items-center justify-between px-4 text-sm font-semibold"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
       >
-        {busy ? 'Applying…' : 'Apply'}
+        Voice studio
+        <ChevronDown className={`h-5 w-5 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
+      {open ? (
+        <div className="space-y-3 border-t border-[var(--line)] px-4 pb-4 pt-3">
+          <Range label="Trim start" value={settings.trimStart} onChange={(v) => patch({ trimStart: v })} />
+          <Range
+            label="Trim end"
+            value={settings.trimEnd}
+            onChange={(v) => patch({ trimEnd: Math.max(v, settings.trimStart + 0.02) })}
+          />
+          <Range label="Boost" value={settings.boost} onChange={(v) => patch({ boost: v })} />
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          <button
+            type="button"
+            className="min-h-11 w-full rounded-full border border-[var(--line)] text-sm font-semibold disabled:opacity-50"
+            disabled={disabled || busy || !sourceBlob}
+            onClick={() => void run()}
+          >
+            {busy ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

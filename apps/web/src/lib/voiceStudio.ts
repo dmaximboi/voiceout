@@ -1,8 +1,8 @@
 import { opusMime } from './recordOpus';
 
-/** 16 kHz / ~20 kbps keeps voice notes WhatsApp-sized. */
-const PROCESS_RATE = 16_000;
-const STUDIO_OPUS_BITS = 20_000;
+/** 24 kHz / ~32 kbps — clearer voice, fewer Opus crackles. */
+const PROCESS_RATE = 24_000;
+const STUDIO_OPUS_BITS = 32_000;
 
 export type StudioSettings = {
   trimStart: number;

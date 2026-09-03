@@ -54,6 +54,6 @@ export async function issueHandoff(
   tokens: { access: string; refresh: string; csrf: string },
 ) {
   const key = randomToken(24);
-  await redis.set(`vo:handoff:${key}`, JSON.stringify(tokens), 'EX', 90);
+  await redis.set(`vo:handoff:${key}`, JSON.stringify(tokens), 'EX', 300);
   return key;
 }

@@ -13,7 +13,7 @@ export async function signAccess(env: Env, payload: AccessPayload): Promise<stri
     .setIssuer(env.JWT_ISS)
     .setAudience(env.JWT_AUD)
     .setIssuedAt()
-    .setExpirationTime('15m')
+    .setExpirationTime('1h')
     .sign(keyOf(env.JWT_SECRET));
 }
 

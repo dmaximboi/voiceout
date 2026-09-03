@@ -1,16 +1,15 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { api, ApiError, clearCsrf, uploadAvatar } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { formatCooldown, STUDIO_PRICE_LABEL } from '@voiceout/shared';
+import { formatCooldown, type PlanTier } from '@voiceout/shared';
 import { Avatar } from '@/components/Avatar';
 import { LegalLinks } from '@/components/LegalLinks';
 import { PasswordField } from '@/components/PasswordField';
-import { SafetySettings } from '@/components/SafetySettings';
-import { canViewModeration } from '@/lib/safetyState';
+import { PlanSubscribeSheet } from '@/components/PlanSubscribeSheet';
+import { planStatusLabel, SettingsMorePanel } from '@/components/SettingsMorePanel';
 
 export function SettingsForm({ compact = false }: { compact?: boolean }) {
   return (
@@ -40,8 +39,9 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [planSheetOpen, setPlanSheetOpen] = useState(false);
   const [subBusy, setSubBusy] = useState(false);
+  const [subBusyTier, setSubBusyTier] = useState<PlanTier | null>(null);
   const [subError, setSubError] = useState<string | null>(null);
   const [subNote, setSubNote] = useState<string | null>(null);
   const [nameCode, setNameCode] = useState('');
@@ -64,15 +64,21 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
   }, [user]);
 
   useEffect(() => {
+    const plan = searchParams.get('plan');
     const studio = searchParams.get('studio');
-    if (studio === 'cancel') {
+    const cancel = plan === 'cancel' || studio === 'cancel';
+    const ok = plan === 'ok' || studio === 'ok';
+    if (cancel) {
       setSubNote('Checkout canceled.');
       router.replace('/settings', { scroll: false });
       return;
     }
-    if (studio !== 'ok') return;
+    if (!ok) return;
     let cancelled = false;
     const checkoutId = searchParams.get('checkout_id') ?? undefined;
+    const tierParam = searchParams.get('tier');
+    const tier =
+      tierParam === 'basic' || tierParam === 'verified' || tierParam === 'gold' ? tierParam : undefined;
     setSubNote('Confirming payment…');
     void (async () => {
       const delays = [0, 2000, 4000, 8000];
@@ -80,17 +86,17 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
         if (delays[i]! > 0) await new Promise((r) => setTimeout(r, delays[i]!));
         if (cancelled) return;
         try {
-          const result = await api<{ ok: boolean; isStudio?: boolean }>(
-            '/billing/studio/confirm',
+          const result = await api<{ ok: boolean; planTier?: PlanTier; isStudio?: boolean }>(
+            '/billing/plans/confirm',
             {
               method: 'POST',
-              body: JSON.stringify(checkoutId ? { checkoutId } : {}),
+              body: JSON.stringify({ checkoutId, tier }),
             },
           );
           if (cancelled) return;
-          if (result.ok || result.isStudio) {
+          if (result.ok || result.planTier || result.isStudio) {
             await refresh();
-            setSubNote('Payment confirmed. Voice studio is active.');
+            setSubNote('Payment confirmed. Your plan is active.');
             router.replace('/settings', { scroll: false });
             return;
           }
@@ -119,18 +125,20 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
     };
   }, [searchParams, refresh, router]);
 
-  async function startStudioCheckout() {
+  async function startPlanCheckout(tier: PlanTier) {
     setSubBusy(true);
+    setSubBusyTier(tier);
     setSubError(null);
     try {
-      const data = await api<{ checkoutUrl: string }>('/billing/studio/checkout', {
+      const data = await api<{ checkoutUrl: string }>('/billing/plans/checkout', {
         method: 'POST',
-        body: '{}',
+        body: JSON.stringify({ tier }),
       });
       window.location.href = data.checkoutUrl;
     } catch (err) {
       setSubError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not start checkout');
       setSubBusy(false);
+      setSubBusyTier(null);
     }
   }
 
@@ -540,94 +548,43 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
 
       {compact ? null : <LegalLinks className="mt-10" />}
       <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-        <h2 className="text-base font-semibold">Open on your phone</h2>
+        <h2 className="text-base font-semibold">Subscription</h2>
         <p className="text-sm text-[var(--muted)]">
-          Makes a one-time link that signs this account in on another device. It expires in 90 seconds.
+          {user.planTier
+            ? `${planStatusLabel(user.planTier)} plan active${user.planUntil ? ` until ${new Date(user.planUntil).toLocaleDateString()}` : ''}.`
+            : 'Unlock longer recordings and profile perks.'}
         </p>
         <button
           type="button"
-          className="flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold active:bg-[var(--bg)]"
-          onClick={() => void makePhoneLink()}
-          disabled={phoneBusy}
+          disabled={subBusy}
+          onClick={() => setPlanSheetOpen(true)}
+          className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
         >
-          {phoneBusy ? 'Making link' : 'Create phone link'}
+          {user.planTier ? 'Change plan' : 'Subscribe'}
         </button>
-        {phoneLink ? (
-          <p className="break-all rounded-xl bg-[var(--bg)] px-3 py-2 text-sm">
-            <a className="text-accent underline" href={phoneLink}>
-              {phoneLink}
-            </a>
-          </p>
-        ) : null}
-      </div>
-
-      <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-        <h2 className="text-base font-semibold">Subscription</h2>
-        <p className="text-sm text-[var(--muted)]">
-          {user.isStudio
-            ? 'Longer recordings (5m+) are unlocked on this account.'
-            : `Unlock 5m, 15m, and 30m recordings for ${STUDIO_PRICE_LABEL}. Trim and boost stay free.`}
-        </p>
-        {user.isStudio ? null : (
-          <button
-            type="button"
-            disabled={subBusy}
-            onClick={() => void startStudioCheckout()}
-            className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
-          >
-            {subBusy ? 'Opening checkout…' : 'Subscribe'}
-          </button>
-        )}
         {subNote ? <p className="text-sm text-[var(--muted)]">{subNote}</p> : null}
         {subError ? <p className="text-sm text-red-600">{subError}</p> : null}
       </div>
 
-      <div className="mt-8 border-t border-[var(--line)] pt-5">
-        <button
-          type="button"
-          className="flex min-h-11 w-full items-center justify-between rounded-xl border border-[var(--line)] px-4 text-sm font-semibold"
-          onClick={() => setMoreOpen((v) => !v)}
-          aria-expanded={moreOpen}
-        >
-          More options
-          <span aria-hidden>{moreOpen ? '▴' : '▾'}</span>
-        </button>
-        {moreOpen ? (
-          <div className="mt-2 space-y-2">
-            <SafetySettings user={user} />
-            {canViewModeration(user.role) ? (
-              <Link
-                href="/switch-acct"
-                className="mt-6 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold"
-              >
-                Switch account
-              </Link>
-            ) : null}
-            <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-              <h2 className="text-base font-semibold text-red-600">Delete account</h2>
-              <p className="text-sm text-[var(--muted)]">
-                All your credentials will be lost and will never be regained. Type DELETE to confirm.
-              </p>
-              <input
-                className="w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base"
-                value={deleteConfirm}
-                onChange={(e) => setDeleteConfirm(e.target.value)}
-                placeholder="DELETE"
-                autoComplete="off"
-              />
-              {deleteError ? <p className="text-sm text-red-600">{deleteError}</p> : null}
-              <button
-                type="button"
-                className="flex min-h-11 items-center rounded-full border border-red-200 px-5 text-sm font-semibold text-red-600 active:bg-[var(--bg)] disabled:opacity-60"
-                disabled={deleteBusy || deleteConfirm !== 'DELETE'}
-                onClick={() => void deleteAccount()}
-              >
-                {deleteBusy ? 'Deleting' : 'Delete my account'}
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </div>
+      <SettingsMorePanel
+        user={user}
+        phoneLink={phoneLink}
+        phoneBusy={phoneBusy}
+        onMakePhoneLink={() => void makePhoneLink()}
+        deleteConfirm={deleteConfirm}
+        setDeleteConfirm={setDeleteConfirm}
+        deleteBusy={deleteBusy}
+        deleteError={deleteError}
+        onDeleteAccount={() => void deleteAccount()}
+      />
+
+      <PlanSubscribeSheet
+        open={planSheetOpen}
+        currentTier={user.planTier}
+        busyTier={subBusyTier}
+        onClose={() => setPlanSheetOpen(false)}
+        onSelect={(tier) => void startPlanCheckout(tier)}
+      />
 
       <button
         type="button"

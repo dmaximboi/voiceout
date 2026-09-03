@@ -13,6 +13,8 @@ import {
   canUseDurationCap,
   createCommentSchema,
   createPostSchema,
+  maxCaptionLength,
+  maxCommentLength,
   MAX_POST_IMAGES,
   reactSchema,
   reportSchema,
@@ -46,8 +48,8 @@ export async function postRoutes(app: FastifyInstance) {
       .where(and(eq(mediaObjects.id, body.mediaId), eq(mediaObjects.userId, req.authUser!.id)))
       .limit(1);
     if (!media || media.kind !== 'post_audio') return reply.code(400).send({ error: 'Invalid media' });
-    if (!canUseDurationCap(body.durationCap, req.authUser!.isStudio)) {
-      return reply.code(403).send({ error: 'Voice studio required for that length', code: 'STUDIO_REQUIRED' });
+    if (!canUseDurationCap(body.durationCap, req.authUser!.planTier)) {
+      return reply.code(403).send({ error: 'Upgrade your plan for that recording length', code: 'PLAN_REQUIRED' });
     }
     const imageIds = [...new Set(body.imageIds ?? [])].slice(0, MAX_POST_IMAGES);
     if (imageIds.length) {
@@ -63,6 +65,10 @@ export async function postRoutes(app: FastifyInstance) {
       }
     }
     await assertDailyQuota(app.redis, 'post', req.authUser!.id);
+    const captionLimit = maxCaptionLength(req.authUser!.planTier);
+    if (body.caption.length > captionLimit) {
+      return reply.code(400).send({ error: `Caption max ${captionLimit} characters on your plan` });
+    }
     const caption = sanitizeText(body.caption);
     const geo = await inferGeo(app.env, [caption, body.transcript ?? ''].join(' '), req.id);
     const status = app.env.SKIP_MEDIA_PROBE || media.status === 'ready' ? 'published' : 'pending';
@@ -270,6 +276,10 @@ export async function postRoutes(app: FastifyInstance) {
       if (!media || media.kind !== 'comment_audio') return reply.code(400).send({ error: 'Invalid media' });
     }
     const cleanBody = sanitizeText(body.body ?? '');
+    const commentLimit = maxCommentLength(req.authUser!.planTier);
+    if (cleanBody.length > commentLimit) {
+      return reply.code(400).send({ error: `Comment max ${commentLimit} characters on your plan` });
+    }
     const classification = await classifyComment(app.env, cleanBody, body.stickerId, req.id);
     const [comment] = await app.db.transaction(async (tx) => {
       const [created] = await tx

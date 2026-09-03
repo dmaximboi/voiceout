@@ -11,6 +11,8 @@ export type AuthUser = {
   sid: string;
   role: 'user' | 'moderator' | 'admin';
   isVerifiedIdentity: boolean;
+  planTier: import('@voiceout/shared').PlanTier | null;
+  /** @deprecated use planTier */
   isStudio: boolean;
 };
 

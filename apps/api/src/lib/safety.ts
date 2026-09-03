@@ -1,4 +1,5 @@
 import {
+  blocks,
   comments,
   notifications,
   posts,
@@ -78,6 +79,13 @@ export async function submitReport(db: Db, reporterId: string, body: ReportSubmi
       .onConflictDoNothing()
       .returning({ id: reports.id });
     if (!inserted) return { accepted: true, duplicate: true };
+
+    if (body.alsoBlock) {
+      await tx
+        .insert(blocks)
+        .values({ blockerId: reporterId, blockedId: target.subjectUserId })
+        .onConflictDoNothing();
+    }
 
     const [aggregate] = await tx
       .select({ value: countDistinct(reports.reporterId) })

@@ -107,7 +107,7 @@ export const durationCapSchema = z.custom<number>(
 );
 
 export const createPostSchema = z.object({
-  caption: z.string().trim().min(1).max(MAX_CAPTION_LENGTH),
+  caption: z.string().trim().min(1).max(1000),
   mediaId: z.string().uuid(),
   imageIds: z.array(z.string().uuid()).max(MAX_POST_IMAGES).optional(),
   durationCap: z.number().refine((v) => (DURATION_CAPS as readonly number[]).includes(v)),
@@ -117,7 +117,7 @@ export const createPostSchema = z.object({
 
 export const createCommentSchema = z
   .object({
-    body: z.string().trim().max(MAX_COMMENT_LENGTH).optional().default(''),
+    body: z.string().trim().max(1000).optional().default(''),
     mediaId: z.string().uuid().optional(),
     stickerId: z
       .enum(PRESET_STICKERS.map((s) => s.id) as [string, ...string[]])
@@ -168,6 +168,11 @@ export const reportSchema = z.object({
   targetId: z.string().uuid(),
   reason: z.enum(['spam', 'abuse', 'illegal', 'other']),
   details: z.string().trim().max(500).optional(),
+  alsoBlock: z.boolean().optional(),
+});
+
+export const planCheckoutSchema = z.object({
+  tier: z.enum(['basic', 'verified', 'gold']),
 });
 
 export const bugFeedbackSchema = z.object({
@@ -204,9 +209,21 @@ export const searchQuerySchema = z.object({
 
 export function isAllowedAudioMime(mime: string): boolean {
   const base = mime.split(';')[0]?.trim().toLowerCase() ?? '';
-  return AUDIO_MIMES.some((m) => m.split(';')[0] === base);
+  if (!base) return true; // browser sometimes omits type; magic check catches fakes
+  if (AUDIO_MIMES.some((m) => m.split(';')[0] === base)) return true;
+  return (
+    base === 'application/ogg' ||
+    base === 'video/webm' ||
+    base === 'audio/m4a' ||
+    base === 'audio/x-m4a' ||
+    base === 'audio/mp3' ||
+    base === 'application/octet-stream'
+  );
 }
 
 export function isAllowedAvatarMime(mime: string): boolean {
-  return (AVATAR_MIMES as readonly string[]).includes(mime);
+  const base = mime.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!base) return true;
+  if ((AVATAR_MIMES as readonly string[]).includes(base)) return true;
+  return base === 'image/jpg' || base === 'image/*' || base === 'application/octet-stream';
 }

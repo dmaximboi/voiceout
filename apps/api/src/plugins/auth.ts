@@ -7,7 +7,7 @@ import { sha256, timingSafeEqualStr } from '../lib/crypto.js';
 import { verifyAccess } from '../lib/jwt.js';
 import type { AuthUser } from '../types.js';
 import { httpError } from '../lib/http.js';
-import { isStudioActive } from '@voiceout/shared';
+import { activePlanTier } from '@voiceout/shared';
 
 const LAST_SEEN_MS = 5 * 60 * 1000;
 
@@ -71,7 +71,8 @@ export async function authPlugin(app: FastifyInstance) {
               sid: payload.sid,
               role: user.role,
               isVerifiedIdentity: Boolean(user.emailVerifiedAt || oauth),
-              isStudio: isStudioActive(user.studioUntil),
+              planTier: activePlanTier(user.planTier, user.studioUntil),
+              isStudio: Boolean(activePlanTier(user.planTier, user.studioUntil)),
             };
             if (session.lastSeenAt && Date.now() - new Date(session.lastSeenAt).getTime() > LAST_SEEN_MS) {
               await app.db

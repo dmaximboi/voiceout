@@ -7,6 +7,7 @@ import {
 } from '@voiceout/db';
 import { and, eq, or, sql } from 'drizzle-orm';
 import type { PublicUser } from '@voiceout/shared';
+import { activePlanTier, planBadge, PLAN_DEFINITIONS } from '@voiceout/shared';
 import type { Env } from '../env.js';
 import { publicMediaUrl } from './s3.js';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -17,7 +18,7 @@ export async function toPublicUser(
   s3: S3Client,
   row: Pick<
     typeof users.$inferSelect,
-    'id' | 'handle' | 'displayName' | 'bio' | 'avatarMediaId' | 'createdAt'
+    'id' | 'handle' | 'displayName' | 'bio' | 'avatarMediaId' | 'createdAt' | 'planTier' | 'studioUntil'
   >,
 ): Promise<PublicUser> {
   const [counts] = await db
@@ -42,6 +43,8 @@ export async function toPublicUser(
   void env;
   void s3;
 
+  const tier = activePlanTier(row.planTier, row.studioUntil);
+
   return {
     id: row.id,
     handle: row.handle,
@@ -51,6 +54,8 @@ export async function toPublicUser(
     followerCount: counts?.followers ?? 0,
     followingCount: counts?.following ?? 0,
     createdAt: row.createdAt.toISOString(),
+    planBadge: planBadge(tier),
+    nameAccent: tier ? PLAN_DEFINITIONS[tier].nameAccent : false,
   };
 }
 
@@ -64,6 +69,8 @@ export function deletedPublicUser(id: string): PublicUser {
     followerCount: 0,
     followingCount: 0,
     createdAt: new Date(0).toISOString(),
+    planBadge: null,
+    nameAccent: false,
   };
 }
 

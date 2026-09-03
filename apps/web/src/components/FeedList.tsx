@@ -31,8 +31,16 @@ export function FeedList({
   const ids = posts.map((p) => p.id).join(',');
 
   useEffect(() => {
-    posts.slice(0, 2).forEach((p) => {
-      if (p.audioUrl) void fetch(p.audioUrl, { credentials: 'include' }).catch(() => undefined);
+    // Warm the first ~15s of the top posts so playback starts instantly.
+    // ~60KB ≈ 15s at ~32kbps Opus; fall back to full fetch if Range is ignored.
+    const warm = posts.slice(0, 18).filter((p) => p.audioUrl);
+    warm.forEach((p, i) => {
+      window.setTimeout(() => {
+        void fetch(p.audioUrl!, {
+          credentials: 'include',
+          headers: { Range: 'bytes=0-65535' },
+        }).catch(() => undefined);
+      }, i * 40);
     });
   }, [ids, posts]);
 

@@ -14,10 +14,43 @@ const avatarFont = Fraunces({
   style: ['italic'],
 });
 
+const site = 'https://voiceout.xyz';
+const description =
+  'VoiceOut is a voice-first social network. Record short voice notes, add photos, follow people, and listen in a ranked feed.';
+
 export const metadata: Metadata = {
-  title: 'VoiceOut',
-  description: 'Voice-first social feed',
+  metadataBase: new URL(site),
+  title: {
+    default: 'VoiceOut — voice-first social',
+    template: '%s · VoiceOut',
+  },
+  description,
+  applicationName: 'VoiceOut',
+  keywords: ['VoiceOut', 'voice social', 'audio posts', 'voice notes', 'social feed'],
+  authors: [{ name: 'VoiceOut' }],
+  creator: 'VoiceOut',
   manifest: '/manifest.json',
+  alternates: { canonical: '/' },
+  openGraph: {
+    type: 'website',
+    locale: 'en_US',
+    url: site,
+    siteName: 'VoiceOut',
+    title: 'VoiceOut — voice-first social',
+    description,
+    images: [{ url: '/logo.png', width: 512, height: 512, alt: 'VoiceOut' }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'VoiceOut — voice-first social',
+    description,
+    images: ['/logo.png'],
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 },
+  },
   icons: {
     icon: [
       { url: '/logo.png', type: 'image/png' },

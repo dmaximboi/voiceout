@@ -1,6 +1,6 @@
 import { claimRecording, registerRecorder } from './audioGate';
 
-const OPUS_BITS = 20_000;
+const OPUS_BITS = 32_000;
 const SPEECH_MIME = 'audio/ogg;codecs=opus';
 const ENCODER_PATH = '/opus/encoderWorker.min.js';
 

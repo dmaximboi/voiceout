@@ -10,6 +10,7 @@ import {
   isAllowedAudioMime,
   isAllowedAvatarMime,
   matchesUploadMagic,
+  sniffUploadMime,
   uploadIntentSchema,
   type DurationCap,
 } from '@voiceout/shared';
@@ -50,8 +51,8 @@ export async function mediaRoutes(app: FastifyInstance) {
       if (!isAllowedAudioMime(body.mime)) return reply.code(400).send({ error: 'Bad audio type' });
       const cap = body.durationCap as DurationCap | undefined;
       if (!cap || !(cap in MAX_AUDIO_BYTES)) return reply.code(400).send({ error: 'Duration cap required' });
-      if (body.kind === 'post_audio' && !canUseDurationCap(cap, req.authUser!.isStudio)) {
-        return reply.code(403).send({ error: 'Voice studio required for that length', code: 'STUDIO_REQUIRED' });
+      if (body.kind === 'post_audio' && !canUseDurationCap(cap, req.authUser!.planTier)) {
+        return reply.code(403).send({ error: 'Upgrade your plan for that length', code: 'PLAN_REQUIRED' });
       }
       if (body.bytes > MAX_AUDIO_BYTES[cap]) return reply.code(400).send({ error: 'Audio too large for cap' });
     }
@@ -98,7 +99,15 @@ export async function mediaRoutes(app: FastifyInstance) {
         ? req.body
         : Buffer.from((req.body as Uint8Array | undefined) ?? []);
       if (!buf.length) return reply.code(400).send({ error: 'Empty file' });
-      if (!matchesUploadMagic(media.mime, buf)) {
+      let declared = (media.mime || '').split(';')[0]?.trim().toLowerCase() ?? '';
+      if (!declared || declared === 'application/octet-stream') {
+        const sniffed = sniffUploadMime(buf);
+        if (sniffed) {
+          declared = sniffed;
+          await app.db.update(mediaObjects).set({ mime: sniffed }).where(eq(mediaObjects.id, id));
+        }
+      }
+      if (!matchesUploadMagic(declared || media.mime, buf)) {
         return reply.code(400).send({ error: 'File type does not match' });
       }
       const maxBytes = uploadMaxBytes(media.kind, media.durationCap);

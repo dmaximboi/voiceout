@@ -42,6 +42,8 @@ const envSchema = z.object({
   BACHS_WEBHOOK_SECRET: z.string().optional().default(''),
   BACHS_API_BASE: z.string().optional().default(''),
   BACHS_STUDIO_PRODUCT_ID: z.string().optional().default(''),
+  BACHS_VERIFIED_PRODUCT_ID: z.string().optional().default(''),
+  BACHS_GOLD_PRODUCT_ID: z.string().optional().default(''),
   PUBLIC_ORIGIN: z.string().optional().default(''),
   JWT_SECRET_PREV: z.string().optional().default(''),
   JWT_ISS: z.string().optional().default('voiceout'),
