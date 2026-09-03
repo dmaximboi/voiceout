@@ -1,6 +1,6 @@
-const SHELL = 'voiceout-shell-v6';
-const STATIC = 'voiceout-static-v6';
-const MEDIA = 'voiceout-media-v4';
+const SHELL = 'voiceout-shell-v7';
+const STATIC = 'voiceout-static-v7';
+const MEDIA = 'voiceout-media-v5';
 const SHELL_URLS = ['/', '/manifest.json', '/logo.png', '/icon-192.png', '/icon-512.png', '/offline'];
 
 self.addEventListener('install', (event) => {
@@ -36,7 +36,7 @@ self.addEventListener('message', (event) => {
         for (const url of event.data.urls.slice(0, 12)) {
           try {
             const res = await fetch(url, { credentials: 'same-origin' });
-            if (res.ok) await cache.put(url, res.clone());
+            if (res.status === 200) await cache.put(url, res.clone());
           } catch {
             /* ignore */
           }
@@ -52,10 +52,12 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Never cache /vo-api or /auth — media can be owner-only; auth must stay live.
+  // Never intercept API/auth — avoid stale auth and Range/206 cache bugs.
   if (url.pathname.startsWith('/vo-api/') || url.pathname.startsWith('/auth/')) {
     return;
   }
+
+  if (req.headers.has('range')) return;
 
   if (url.pathname.startsWith('/samples/')) {
     event.respondWith(cacheFirst(MEDIA, req));
@@ -67,7 +69,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML — network first, no write-back of navigations (avoids stale blank shells).
   if (req.mode === 'navigate' || req.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(req)
@@ -82,8 +83,9 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res.ok && SHELL_URLS.includes(url.pathname)) {
-          void caches.open(SHELL).then((cache) => cache.put(req, res.clone()));
+        if (res.status === 200 && SHELL_URLS.includes(url.pathname)) {
+          const copy = res.clone();
+          void caches.open(SHELL).then((cache) => cache.put(req, copy)).catch(() => undefined);
         }
         return res;
       })
@@ -97,12 +99,18 @@ async function cacheFirst(cacheName, req) {
   if (hit) {
     void fetch(req)
       .then((res) => {
-        if (res.ok) void cache.put(req, res.clone());
+        if (res.status === 200) {
+          const copy = res.clone();
+          void cache.put(req, copy).catch(() => undefined);
+        }
       })
       .catch(() => undefined);
     return hit;
   }
   const res = await fetch(req);
-  if (res.ok) void cache.put(req, res.clone());
+  if (res.status === 200) {
+    const copy = res.clone();
+    void cache.put(req, copy).catch(() => undefined);
+  }
   return res;
 }

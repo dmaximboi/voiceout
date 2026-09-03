@@ -25,7 +25,9 @@ const parsed = new URL(ownerUrl.replace(/^postgres(ql)?:/, 'http:'));
 const dbName = ident(decodeURIComponent(parsed.pathname.replace(/^\//, '') || 'voiceout'));
 const host = parsed.hostname || 'localhost';
 const port = parsed.port || '5432';
-const appUrl = `postgres://${encodeURIComponent(appUser)}:${encodeURIComponent(appPassword)}@${host}:${port}/${dbName}`;
+const search = parsed.search || (host.includes('localhost') || host === '127.0.0.1' ? '' : '?sslmode=require');
+const appUrl = `postgres://${encodeURIComponent(appUser)}:${encodeURIComponent(appPassword)}@${host}:${port}/${dbName}${search}`;
+
 const passwordLiteral = `'${appPassword.replace(/'/g, "''")}'`;
 
 const sql = postgres(ownerUrl, { max: 1 });
