@@ -424,6 +424,8 @@ export async function userRoutes(app: FastifyInstance) {
         bio: users.bio,
         avatarMediaId: users.avatarMediaId,
         createdAt: users.createdAt,
+        planTier: users.planTier,
+        studioUntil: users.studioUntil,
       })
       .from(users)
       .where(and(eq(users.handle, handle), isNull(users.deletedAt)))
