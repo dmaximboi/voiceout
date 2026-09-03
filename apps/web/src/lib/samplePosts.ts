@@ -14,6 +14,8 @@ function user(
     followerCount: 0,
     followingCount: 0,
     createdAt: new Date().toISOString(),
+    planBadge: null,
+    nameAccent: false,
   };
 }
 
