@@ -1,5 +1,32 @@
 # Production deploy — VoiceOut (voiceout.xyz)
 
+## Release safety (required)
+
+**`main` = production only.** Do not push unfinished work straight to `main`.
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Live site (Vercel production + what we deploy to Fly/Render) |
+| `develop` | Integration / testing branch |
+| `feature/...` | Day-to-day work |
+
+**Flow**
+
+1. Create a feature branch from `develop` (or work on `develop` for small fixes).
+2. Push → open a **PR into `develop`**. Vercel builds a **Preview URL** — use that to verify.
+3. After preview looks good, open a **PR `develop` → `main`**.
+4. Only after that PR merges: production web updates; then run `fly deploy` (and Render if needed) from `main`.
+
+**Checks before merging to `main`**
+
+- Vercel preview build is green
+- Smoke: login, record/upload, settings, feed play
+- DB migrations applied only when intentional (and tested)
+
+Local default for ongoing work: stay on `develop`.
+
+---
+
 | App | Host | Config |
 | --- | --- | --- |
 | `apps/web` | **Vercel** | `apps/web/vercel.json` |
@@ -9,7 +36,7 @@
 | Postgres | **Neon** | already migrated + gated |
 | Redis | **Upstash** | `REDIS_URL` |
 | Media | **Cloudflare R2** | `S3_*` |
-| DNS / TLS | **Cloudflare** | `voiceout.xyz`, `api.voiceout.xyz` |
+| DNS / TLS | **Namecheap DNS** + Vercel/Fly HTTPS | `voiceout.xyz`, `api.voiceout.xyz` |
 
 Secrets live in host dashboards (and local gitignored `.env.production.local`). Never commit `.env`, `.env.production.local`, or `detail.md`.
 

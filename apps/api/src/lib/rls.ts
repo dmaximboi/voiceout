@@ -15,6 +15,8 @@ export const userDirectoryColumns = {
   deletedAt: users.deletedAt,
   suspendedAt: users.suspendedAt,
   role: users.role,
+  planTier: users.planTier,
+  studioUntil: users.studioUntil,
 } as const;
 
 /** Temporarily disable RLS for credential lookup / lockout (login, register, OAuth link). */
