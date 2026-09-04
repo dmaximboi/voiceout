@@ -3,11 +3,11 @@
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Home, Mic, Search, User } from 'lucide-react';
+import { Home, Mic, Search, User, Heart, Repeat2, MessageCircle, Bookmark } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useProcessing } from '@/lib/useProcessing';
 import { DropBalls, SendBar } from './SendProgress';
-import { useNotifications } from '@/lib/notifications';
+import { useNotifications, type DropSignals } from '@/lib/notifications';
 import { hasUnreadNotifications } from '@/lib/safetyState';
 import { SettingsForm } from './SettingsForm';
 
@@ -41,8 +41,9 @@ export function DockBar({
   const path = usePathname();
   const router = useRouter();
   const { user } = useAuth();
-  const { unreadCount } = useNotifications();
+  const { unreadCount, signals } = useNotifications();
   const hasUnread = hasUnreadNotifications(unreadCount);
+  const signalIcons = dropSignalIcons(signals);
   const sending = useProcessing();
   const [mode, setMode] = useState<DockMode>('idle');
   const [query, setQuery] = useState('');
@@ -255,7 +256,13 @@ export function DockBar({
             ) : (
               <button
                 type="button"
-                aria-label={hasUnread ? `Drops, ${unreadCount} unread` : 'Drops'}
+                aria-label={
+                  hasUnread
+                    ? signalIcons.length
+                      ? `Drops: ${signalIcons.map((s) => s.label).join(', ')}`
+                      : `Drops, ${unreadCount} unread`
+                    : 'Drops'
+                }
                 aria-expanded={mode === 'drops'}
                 onClick={() => {
                   if (skipClick.current) {
@@ -267,11 +274,31 @@ export function DockBar({
                 className={`flex h-11 w-full items-center justify-center gap-2 rounded-full text-[15px] font-medium disabled:opacity-80 ${
                   mode === 'drops' || dropHot
                     ? 'bg-accent text-white'
-                    : 'bg-[var(--bg)] text-[var(--text)] ring-1 ring-[var(--line)]'
+                    : hasUnread && !signalIcons.length
+                      ? 'bg-[var(--bg)] text-accent ring-1 ring-accent/35'
+                      : 'bg-[var(--bg)] text-[var(--text)] ring-1 ring-[var(--line)]'
                 }`}
               >
-                {sending ? <DropBalls /> : dropHot ? 'Drop here' : 'Drops'}
-                {hasUnread ? <span className="unread-breathe h-2.5 w-2.5 rounded-full bg-emerald-500" aria-hidden /> : null}
+                {sending ? (
+                  <DropBalls />
+                ) : dropHot ? (
+                  'Drop here'
+                ) : signalIcons.length ? (
+                  <span className="flex items-center gap-2">
+                    {signalIcons.map(({ key, Icon }) => (
+                      <Icon
+                        key={key}
+                        size={18}
+                        strokeWidth={2.4}
+                        className={mode === 'drops' || dropHot ? 'text-white' : 'text-accent'}
+                        fill={key === 'like' || key === 'bookmark' ? 'currentColor' : 'none'}
+                        aria-hidden
+                      />
+                    ))}
+                  </span>
+                ) : (
+                  'Drops'
+                )}
               </button>
             )}
           </div>
@@ -340,4 +367,14 @@ export function DockBar({
       ) : null}
     </nav>
   );
+}
+
+function dropSignalIcons(signals: DropSignals) {
+  const order = [
+    { key: 'like' as const, Icon: Heart, label: 'likes' },
+    { key: 'repost' as const, Icon: Repeat2, label: 'reshares' },
+    { key: 'comment' as const, Icon: MessageCircle, label: 'comments' },
+    { key: 'bookmark' as const, Icon: Bookmark, label: 'bookmarks' },
+  ];
+  return order.filter((item) => signals[item.key]);
 }

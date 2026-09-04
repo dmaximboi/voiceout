@@ -15,9 +15,25 @@ export async function socialRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const [post] = await app.db.select({ id: posts.id }).from(posts).where(eq(posts.id, id)).limit(1);
+    const [post] = await app.db
+      .select({ id: posts.id, authorId: posts.authorId })
+      .from(posts)
+      .where(eq(posts.id, id))
+      .limit(1);
     if (!post) return reply.code(404).send({ error: 'Not found' });
-    await app.db.insert(bookmarks).values({ userId: req.authUser!.id, postId: id }).onConflictDoNothing();
+    const inserted = await app.db
+      .insert(bookmarks)
+      .values({ userId: req.authUser!.id, postId: id })
+      .onConflictDoNothing()
+      .returning({ postId: bookmarks.postId });
+    if (inserted.length && post.authorId !== req.authUser!.id) {
+      await notify(app.db, {
+        userId: post.authorId,
+        actorId: req.authUser!.id,
+        type: 'bookmark',
+        postId: id,
+      });
+    }
     return { ok: true };
   });
 
@@ -35,9 +51,13 @@ export async function socialRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!post) return reply.code(404).send({ error: 'Not found' });
-    await app.db.insert(reposts).values({ userId: req.authUser!.id, postId: id }).onConflictDoNothing();
-    if (post.authorId !== req.authUser!.id) {
-      await notify(app.db, { userId: post.authorId, actorId: req.authUser!.id, type: 'reaction', postId: id });
+    const inserted = await app.db
+      .insert(reposts)
+      .values({ userId: req.authUser!.id, postId: id })
+      .onConflictDoNothing()
+      .returning({ postId: reposts.postId });
+    if (inserted.length && post.authorId !== req.authUser!.id) {
+      await notify(app.db, { userId: post.authorId, actorId: req.authUser!.id, type: 'repost', postId: id });
     }
     return { ok: true };
   });

@@ -6,7 +6,7 @@ export async function notify(
   input: {
     userId: string;
     actorId: string;
-    type: 'follow' | 'comment' | 'reaction' | 'comment_like' | 'follow_post' | 'trending';
+    type: 'follow' | 'comment' | 'reaction' | 'comment_like' | 'follow_post' | 'trending' | 'repost' | 'bookmark';
     postId?: string | null;
     commentId?: string | null;
   },

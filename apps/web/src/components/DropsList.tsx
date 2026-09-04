@@ -111,8 +111,11 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
 function label(type: NotificationCard['type']) {
   if (type === 'follow') return 'followed you';
   if (type === 'comment') return 'commented on your voice';
-  if (type === 'reaction') return 'reacted to your voice';
+  if (type === 'reaction') return 'liked your voice';
+  if (type === 'repost') return 'reshared your voice';
+  if (type === 'bookmark') return 'bookmarked your voice';
   if (type === 'follow_post') return 'dropped a new voice';
   if (type === 'trending') return 'is trending';
+  if (type === 'account_warning') return 'sent an account notice';
   return 'liked your comment';
 }

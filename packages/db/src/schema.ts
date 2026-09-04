@@ -38,6 +38,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'follow_post',
   'trending',
   'account_warning',
+  'repost',
+  'bookmark',
 ]);
 export const reportTargetEnum = pgEnum('report_target', ['post', 'comment', 'user']);
 export const reportReasonEnum = pgEnum('report_reason', ['spam', 'abuse', 'illegal', 'other']);
