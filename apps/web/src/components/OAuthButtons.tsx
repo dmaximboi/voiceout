@@ -99,7 +99,7 @@ function TelegramButton({ next, className }: { next: string; className: string }
           setBusy(false);
           return;
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
       }
       setHint('Timed out. Tap Telegram and Start again.');
       setBusy(false);

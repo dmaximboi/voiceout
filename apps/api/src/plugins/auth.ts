@@ -8,6 +8,7 @@ import { verifyAccess } from '../lib/jwt.js';
 import type { AuthUser } from '../types.js';
 import { httpError } from '../lib/http.js';
 import { activePlanTier } from '@voiceout/shared';
+import { ensureBootstrapAdmin } from '../lib/adminEmails.js';
 
 const LAST_SEEN_MS = 5 * 60 * 1000;
 
@@ -53,7 +54,8 @@ export async function authPlugin(app: FastifyInstance) {
           req.authUser = null;
         } else {
           await app.db.execute(sql`select set_config('app.user_id', ${session.userId}, true)`);
-          const [user] = await app.db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+          const [row] = await app.db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+          const user = row ? await ensureBootstrapAdmin(app.db, app.env, row) : null;
           if (user?.suspendedAt) {
             throw httpError(403, 'Account suspended', { code: 'ACCOUNT_SUSPENDED' });
           } else if (!user || user.deletedAt) {

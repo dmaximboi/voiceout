@@ -4,7 +4,6 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { PLAN_TIERS, type PlanTier } from '@voiceout/shared';
 import { api, ApiError } from '@/lib/api';
 import { useRequireAuth } from '@/lib/auth';
-import { canViewModeration } from '@/lib/safetyState';
 import { AdminStepUp, useAdminStepUpStatus } from '@/components/AdminStepUp';
 
 type Tab = 'users' | 'reports' | 'plans' | 'audit';
@@ -49,9 +48,6 @@ export function AdminConsole() {
 
   if (loading || !user) {
     return <p className="p-6 text-sm text-[var(--muted)]">Checking your session.</p>;
-  }
-  if (!canViewModeration(user.role)) {
-    return <p className="p-6 text-sm text-[var(--muted)]">Nothing here.</p>;
   }
 
   return (

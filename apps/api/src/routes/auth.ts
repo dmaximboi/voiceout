@@ -8,6 +8,7 @@ import { consumeRedisToken, issueRedisToken, issueOtpCode, consumeOtpCode } from
 import { clearAuthCookies, readCookies, setAuthCookies, setCsrfCookie, setDeviceCookie } from '../lib/cookies.js';
 import { createSession, issueHandoff, issueSession } from '../lib/session.js';
 import { toMeUser } from '../lib/cooldown.js';
+import { ensureBootstrapAdmin } from '../lib/adminEmails.js';
 import { requireAuth, requireCsrf, grantAdminStepUp, adminStepUpRemaining } from '../plugins/auth.js';
 import { assertFlag } from '../lib/flags.js';
 import { sanitizeText } from '../lib/sanitize.js';
@@ -170,8 +171,9 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/auth/me', async (req, reply) => {
     if (!req.authUser) return reply.code(401).send({ error: 'Unauthorized' });
-    const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser.id)).limit(1);
-    if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+    const [row] = await app.db.select().from(users).where(eq(users.id, req.authUser.id)).limit(1);
+    if (!row) return reply.code(401).send({ error: 'Unauthorized' });
+    const user = await ensureBootstrapAdmin(app.db, app.env, row);
     return { user: await toMeUser(app.db, app.env, app.s3, user) };
   });
 
