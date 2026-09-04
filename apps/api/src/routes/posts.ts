@@ -10,6 +10,8 @@ import {
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   COMMENT_CATEGORIES,
+  canDeleteOwnPost,
+  canEditPostCaption,
   canUseDurationCap,
   createCommentSchema,
   createPostSchema,
@@ -18,6 +20,7 @@ import {
   MAX_POST_IMAGES,
   reactSchema,
   reportSchema,
+  updatePostCaptionSchema,
   type CommentCard,
 } from '@voiceout/shared';
 import { requireAuth, requireCsrf, requireInternal, requireVerifiedIdentity } from '../plugins/auth.js';
@@ -137,10 +140,49 @@ export async function postRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.patch('/posts/:id', async (req, reply) => {
+    requireAuth(req, reply);
+    requireCsrf(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = updatePostCaptionSchema.parse(req.body);
+    if (!canEditPostCaption(req.authUser!.planTier)) {
+      return reply.code(403).send({
+        error: 'Subscribe from $1 to edit captions',
+        code: 'PLAN_REQUIRED',
+      });
+    }
+    const captionLimit = maxCaptionLength(req.authUser!.planTier);
+    if (body.caption.length > captionLimit) {
+      return reply.code(400).send({ error: `Caption max ${captionLimit} characters on your plan` });
+    }
+    const caption = sanitizeText(body.caption);
+    const updated = await app.db
+      .update(posts)
+      .set({ caption })
+      .where(and(eq(posts.id, id), eq(posts.authorId, req.authUser!.id)))
+      .returning();
+    if (updated.length === 0) return reply.code(404).send({ error: 'Not found' });
+    await writeAudit(app.db, req, 'post_caption_edit', req.authUser!.id, { postId: id });
+    const [card] = await hydratePosts(app.db, app.env, app.s3, updated, req.authUser!.id);
+    return { post: card };
+  });
+
   app.delete('/posts/:id', async (req, reply) => {
     requireAuth(req, reply);
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const [existing] = await app.db
+      .select({ id: posts.id, createdAt: posts.createdAt })
+      .from(posts)
+      .where(and(eq(posts.id, id), eq(posts.authorId, req.authUser!.id)))
+      .limit(1);
+    if (!existing) return reply.code(404).send({ error: 'Not found' });
+    if (!canDeleteOwnPost(existing.createdAt, req.authUser!.planTier)) {
+      return reply.code(403).send({
+        error: 'Free accounts can delete only within 24 hours. Subscribe from $1 to delete anytime.',
+        code: 'PLAN_REQUIRED',
+      });
+    }
     const deleted = await app.db
       .delete(posts)
       .where(and(eq(posts.id, id), eq(posts.authorId, req.authUser!.id)))

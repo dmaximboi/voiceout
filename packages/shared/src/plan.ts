@@ -2,6 +2,9 @@ import { DURATION_CAPS, type DurationCap } from './constants.js';
 
 export const FREE_DURATION_CAPS = [30, 60, 120] as const satisfies readonly DurationCap[];
 
+/** Free users may delete their own posts only within this window. */
+export const FREE_POST_DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export const PLAN_TIERS = ['basic', 'verified', 'gold'] as const;
 export type PlanTier = (typeof PLAN_TIERS)[number];
 
@@ -33,7 +36,11 @@ export const PLAN_DEFINITIONS: Record<
     priceCents: 100,
     priceLabel: '$1',
     title: 'Voice',
-    benefits: ['Record up to 5 minutes'],
+    benefits: [
+      'Record up to 5 minutes',
+      'Edit captions after posting',
+      'Delete posts anytime',
+    ],
     maxDurationCap: 300,
     badge: null,
     nameAccent: false,
@@ -44,7 +51,12 @@ export const PLAN_DEFINITIONS: Record<
     priceCents: 300,
     priceLabel: '$3',
     title: 'Verified',
-    benefits: ['Blue tick on your profile', 'Record up to 15 minutes'],
+    benefits: [
+      'Blue tick on your profile',
+      'Record up to 15 minutes',
+      'Edit captions after posting',
+      'Delete posts anytime',
+    ],
     maxDurationCap: 900,
     badge: 'blue',
     nameAccent: false,
@@ -55,7 +67,13 @@ export const PLAN_DEFINITIONS: Record<
     priceCents: 500,
     priceLabel: '$5',
     title: 'Gold',
-    benefits: ['Gold tick and gold name', 'Record up to 30 minutes', 'Longer captions and comments'],
+    benefits: [
+      'Gold tick and gold name',
+      'Record up to 30 minutes',
+      'Edit captions after posting',
+      'Delete posts anytime',
+      'Longer captions and comments',
+    ],
     maxDurationCap: 1800,
     badge: 'gold',
     nameAccent: true,
@@ -104,6 +122,26 @@ export function isStudioActive(
   now = Date.now(),
 ): boolean {
   return isPlanActive(planUntil, now);
+}
+
+export function hasPaidPlan(planTier: PlanTier | null | undefined): boolean {
+  return Boolean(planTier);
+}
+
+/** Free: delete within 24h. Paid ($1+): delete anytime. */
+export function canDeleteOwnPost(
+  createdAt: Date | string,
+  planTier: PlanTier | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (hasPaidPlan(planTier)) return true;
+  const ms = createdAt instanceof Date ? createdAt.getTime() : Date.parse(createdAt);
+  return Number.isFinite(ms) && now - ms <= FREE_POST_DELETE_WINDOW_MS;
+}
+
+/** Caption edits require any active paid plan ($1+). */
+export function canEditPostCaption(planTier: PlanTier | null | undefined): boolean {
+  return hasPaidPlan(planTier);
 }
 
 export function planBadge(tier: PlanTier | null | undefined): PlanBadge {

@@ -115,6 +115,10 @@ export const createPostSchema = z.object({
   transcript: z.string().trim().max(4000).optional(),
 });
 
+export const updatePostCaptionSchema = z.object({
+  caption: z.string().trim().min(1).max(1000),
+});
+
 export const createCommentSchema = z
   .object({
     body: z.string().trim().max(1000).optional().default(''),

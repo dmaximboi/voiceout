@@ -11,11 +11,13 @@ export function FeedList({
   posts,
   onChange,
   onFeedback,
+  onRemove,
   autoPlay,
 }: {
   posts: PostCard[];
   onChange: (next: PostCard) => void;
   onFeedback?: (post: PostCard, kind: FeedFeedbackKind) => void;
+  onRemove?: (postId: string) => void;
   autoPlay?: boolean;
 }) {
   const { user } = useAuth();
@@ -170,7 +172,7 @@ export function FeedList({
           data-src={p.audioUrl ?? ''}
           data-ms={p.durationMs}
         >
-          <FeedCard post={p} onChange={onChange} onFeedback={onFeedback} />
+          <FeedCard post={p} onChange={onChange} onFeedback={onFeedback} onRemove={onRemove} />
         </div>
       ))}
     </div>
