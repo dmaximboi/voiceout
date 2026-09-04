@@ -207,7 +207,7 @@ export const posts = pgTable(
     authorId: uuid('author_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    caption: varchar('caption', { length: 500 }).notNull(),
+    caption: varchar('caption', { length: 1000 }).notNull(),
     transcript: text('transcript'),
     mediaId: uuid('media_id')
       .notNull()

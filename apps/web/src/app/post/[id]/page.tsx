@@ -187,7 +187,11 @@ function PostPageInner() {
 
   return (
     <div>
-      <FeedCard post={post} onChange={setPost} />
+      <FeedCard
+        post={post}
+        onChange={setPost}
+        onRemove={() => router.push('/')}
+      />
       {replyError ? <p className="px-4 pt-2 text-sm text-red-600">{replyError}</p> : null}
       <div className="border-b border-[var(--line)] px-3 py-3">
         {user ? (

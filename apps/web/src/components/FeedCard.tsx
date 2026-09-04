@@ -5,6 +5,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import type { FeedFeedbackKind, PostCard } from '@voiceout/shared';
 import {
+  canDeleteOwnPost,
+  canEditPostCaption,
+  maxCaptionLength,
+} from '@voiceout/shared';
+import {
   Bookmark,
   Heart,
   MessageCircle,
@@ -13,7 +18,7 @@ import {
   Repeat2,
   Share2,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { postPath, postShareUrl } from '@/lib/share';
 import { Avatar } from './AppShell';
@@ -28,15 +33,18 @@ export function FeedCard({
   post,
   onChange,
   onFeedback,
+  onRemove,
 }: {
   post: PostCard;
   onChange?: (p: PostCard) => void;
   onFeedback?: (post: PostCard, kind: FeedFeedbackKind) => void;
+  onRemove?: (postId: string) => void;
 }) {
   const { user } = useAuth();
   const router = useRouter();
   const path = usePathname();
   const demo = post.id.startsWith('sample-');
+  const isOwner = Boolean(user?.id && user.id === post.author.id);
   const loved = post.myReaction === 'love';
   const loves = Object.values(post.reactionCounts).reduce((a, b) => a + b, 0);
   const [shared, setShared] = useState(false);
@@ -46,6 +54,10 @@ export function FeedCard({
   const [actionError, setActionError] = useState<string | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [captionDraft, setCaptionDraft] = useState(post.caption);
+  const [captionBusy, setCaptionBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const overflowRef = useRef<HTMLDivElement>(null);
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
@@ -89,6 +101,66 @@ export function FeedCard({
     setReportOpen(false);
     window.setTimeout(() => overflowButtonRef.current?.focus(), 0);
   }, []);
+
+  useEffect(() => {
+    if (!editingCaption) setCaptionDraft(post.caption);
+  }, [post.caption, editingCaption]);
+
+  async function saveCaption() {
+    const next = captionDraft.trim();
+    if (!next || next === post.caption) {
+      setEditingCaption(false);
+      return;
+    }
+    if (!canEditPostCaption(user?.planTier ?? null)) {
+      setActionError('Subscribe from $1 to edit captions');
+      router.push('/settings');
+      return;
+    }
+    setCaptionBusy(true);
+    setActionError(null);
+    try {
+      const data = await api<{ post: PostCard }>(`/posts/${post.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ caption: next }),
+      });
+      onChange?.(data.post);
+      setEditingCaption(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not edit caption';
+      setActionError(msg);
+      if (err instanceof ApiError && err.extra.code === 'PLAN_REQUIRED') {
+        router.push('/settings');
+      }
+    } finally {
+      setCaptionBusy(false);
+    }
+  }
+
+  async function deleteOwnPost() {
+    if (!window.confirm('Delete this post? This cannot be undone.')) return;
+    if (!canDeleteOwnPost(post.createdAt, user?.planTier ?? null)) {
+      setActionError('Free accounts can delete only within 24 hours. Subscribe from $1 to delete anytime.');
+      router.push('/settings');
+      return;
+    }
+    setDeleteBusy(true);
+    setActionError(null);
+    setOverflowOpen(false);
+    try {
+      await api(`/posts/${post.id}`, { method: 'DELETE', body: '{}' });
+      onRemove?.(post.id);
+      if (path.startsWith('/post/')) router.push('/');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not delete post';
+      setActionError(msg);
+      if (err instanceof ApiError && err.extra.code === 'PLAN_REQUIRED') {
+        router.push('/settings');
+      }
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   async function runAction(label: string, work: () => Promise<void>) {
     setActionError(null);
@@ -317,7 +389,7 @@ export function FeedCard({
                 {timeAgo(post.createdAt)}
               </span>
             </div>
-            {!demo && user?.id !== post.author.id && user ? (
+            {!demo && user && (isOwner || user.id !== post.author.id) ? (
               <div ref={overflowRef} className="relative shrink-0">
                 <button
                   ref={overflowButtonRef}
@@ -348,45 +420,111 @@ export function FeedCard({
                       items[(current + offset + items.length) % items.length]?.focus();
                     }}
                   >
-                    {onFeedback ? (
+                    {isOwner ? (
                       <>
                         <button
                           ref={firstOverflowItemRef}
                           role="menuitem"
                           type="button"
                           className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium active:bg-[var(--bg)]"
-                          onClick={() => giveFeedback('not_interested')}
+                          onClick={() => {
+                            setOverflowOpen(false);
+                            if (!canEditPostCaption(user.planTier ?? null)) {
+                              setActionError('Subscribe from $1 to edit captions');
+                              router.push('/settings');
+                              return;
+                            }
+                            setCaptionDraft(post.caption);
+                            setEditingCaption(true);
+                          }}
                         >
-                          Not interested in this post
+                          Edit caption
                         </button>
                         <button
                           role="menuitem"
                           type="button"
-                          className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium active:bg-[var(--bg)]"
-                          onClick={() => giveFeedback('hide_author')}
+                          disabled={deleteBusy}
+                          className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium text-red-600 active:bg-[var(--bg)] disabled:opacity-50"
+                          onClick={() => void deleteOwnPost()}
                         >
-                          Hide posts from this author
+                          {deleteBusy ? 'Deleting…' : 'Delete post'}
                         </button>
                       </>
-                    ) : null}
-                    <button
-                      ref={onFeedback ? undefined : firstOverflowItemRef}
-                      role="menuitem"
-                      type="button"
-                      className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium text-red-600 active:bg-[var(--bg)]"
-                      onClick={() => {
-                        setOverflowOpen(false);
-                        setReportOpen(true);
-                      }}
-                    >
-                      Report abuse or safety issue
-                    </button>
+                    ) : (
+                      <>
+                        {onFeedback ? (
+                          <>
+                            <button
+                              ref={firstOverflowItemRef}
+                              role="menuitem"
+                              type="button"
+                              className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium active:bg-[var(--bg)]"
+                              onClick={() => giveFeedback('not_interested')}
+                            >
+                              Not interested in this post
+                            </button>
+                            <button
+                              role="menuitem"
+                              type="button"
+                              className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium active:bg-[var(--bg)]"
+                              onClick={() => giveFeedback('hide_author')}
+                            >
+                              Hide posts from this author
+                            </button>
+                          </>
+                        ) : null}
+                        <button
+                          ref={onFeedback ? undefined : firstOverflowItemRef}
+                          role="menuitem"
+                          type="button"
+                          className="flex min-h-11 w-full items-center px-4 text-left text-sm font-medium text-red-600 active:bg-[var(--bg)]"
+                          onClick={() => {
+                            setOverflowOpen(false);
+                            setReportOpen(true);
+                          }}
+                        >
+                          Report abuse or safety issue
+                        </button>
+                      </>
+                    )}
                   </div>
                 ) : null}
               </div>
             ) : null}
           </div>
-          {demo ? (
+          {editingCaption && isOwner ? (
+            <div className="mt-2 space-y-2">
+              <textarea
+                className="w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-[15px] leading-6"
+                rows={3}
+                maxLength={maxCaptionLength(user?.planTier ?? null)}
+                value={captionDraft}
+                onChange={(e) => setCaptionDraft(e.target.value)}
+                disabled={captionBusy}
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={captionBusy || !captionDraft.trim()}
+                  className="min-h-10 rounded-full bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() => void saveCaption()}
+                >
+                  {captionBusy ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  disabled={captionBusy}
+                  className="min-h-10 rounded-full border border-[var(--line)] px-4 text-sm font-semibold disabled:opacity-50"
+                  onClick={() => {
+                    setEditingCaption(false);
+                    setCaptionDraft(post.caption);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : demo ? (
             <p className="mt-1 break-words whitespace-pre-wrap text-[15px] leading-6">
               {post.caption}
             </p>

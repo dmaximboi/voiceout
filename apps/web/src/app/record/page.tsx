@@ -4,12 +4,14 @@ import {
   DURATION_CAP_LABELS,
   FREE_DURATION_CAPS,
   MAX_POST_IMAGES,
+  PLAN_DEFINITIONS,
   allowedDurationCaps,
   canUseDurationCap,
   maxCaptionLength,
   type DurationCap,
 } from '@voiceout/shared';
 import { ImagePlus, Loader2, Mic, Pause, Play, Square, Trash2, X } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { api, uploadAudio, uploadPostImage } from '@/lib/api';
@@ -321,6 +323,33 @@ function RecordPageInner() {
           </button>
         ))}
       </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {(planTier
+          ? PLAN_DEFINITIONS[planTier].benefits
+          : [
+              'Delete within 24 hours (free)',
+              'Edit captions from $1',
+              'Delete anytime from $1',
+              'Longer recordings from $1',
+            ]
+        ).map((benefit) => (
+          <div
+            key={benefit}
+            className="rounded-2xl border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs font-medium leading-snug text-[var(--muted)]"
+          >
+            {benefit}
+          </div>
+        ))}
+      </div>
+      {!planTier ? (
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Free delete window is 24 hours.{' '}
+          <Link href="/settings" className="font-semibold text-accent underline-offset-2 hover:underline">
+            Subscribe from $1
+          </Link>{' '}
+          to edit captions and delete anytime.
+        </p>
+      ) : null}
       <div className="mt-8 flex flex-col items-center gap-4">
         <div className="font-mono text-4xl font-bold tabular-nums">
           {formatMs(elapsed)}

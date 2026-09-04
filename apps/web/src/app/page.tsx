@@ -256,7 +256,16 @@ export default function HomePage() {
           <FeedSkeleton />
         </>
       ) : (
-        <FeedList autoPlay posts={posts} onChange={patch} onFeedback={giveFeedback} />
+        <FeedList
+          autoPlay
+          posts={posts}
+          onChange={patch}
+          onFeedback={giveFeedback}
+          onRemove={(id) => {
+            setFeedPosts((all) => all.filter((p) => p.id !== id));
+            setTrendPosts((all) => all.filter((p) => p.id !== id));
+          }}
+        />
       )}
       {undoFeedback ? (
         <div
