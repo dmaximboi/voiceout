@@ -36,3 +36,29 @@ export function matchesUploadMagic(mime: string, buf: Uint8Array): boolean {
   // Unknown declared type — accept if magic sniffs to anything we support.
   return sniffUploadMime(buf) !== null;
 }
+
+/** Reject obvious polyglot / executable payloads smuggled in uploads. */
+export function looksLikeHostileUpload(buf: Uint8Array): boolean {
+  if (buf.length < 2) return true;
+  // Windows PE / DOS MZ
+  if (buf[0] === 0x4d && buf[1] === 0x5a) return true;
+  // ELF
+  if (buf[0] === 0x7f && at(buf, 1, 'ELF')) return true;
+  // Bare ZIP/JAR/APK — not a valid voice/image container for us
+  if (at(buf, 0, 'PK') && !sniffUploadMime(buf)) return true;
+  // Scan a prefix for embedded script/server payloads (polyglot images)
+  const sampleLen = Math.min(buf.length, 512_000);
+  const text = new TextDecoder('latin1').decode(buf.subarray(0, sampleLen)).toLowerCase();
+  const markers = [
+    '<?php',
+    '<script',
+    '<%',
+    '#!/',
+    'powershell',
+    'cmd.exe',
+    'application/x-msdownload',
+    '<html',
+    'javascript:',
+  ];
+  return markers.some((m) => text.includes(m));
+}

@@ -118,7 +118,13 @@ export async function buildApp(opts: {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ZodError) {
       req.log.warn({ err }, 'invalid input');
-      return reply.code(400).send({ error: 'Invalid input', details: err.flatten() });
+      const first =
+        err.issues[0]?.message && err.issues[0].message !== 'Invalid input'
+          ? err.issues[0].message
+          : err.flatten().formErrors[0] ||
+            Object.values(err.flatten().fieldErrors).flat()[0] ||
+            'Invalid input';
+      return reply.code(400).send({ error: first, details: err.flatten() });
     }
     if (err instanceof HttpError) {
       req.log.warn({ err, status: err.statusCode }, err.message);

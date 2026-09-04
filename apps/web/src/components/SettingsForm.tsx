@@ -7,9 +7,8 @@ import { useAuth } from '@/lib/auth';
 import { formatCooldown, type PlanTier } from '@voiceout/shared';
 import { Avatar } from '@/components/Avatar';
 import { LegalLinks } from '@/components/LegalLinks';
-import { PasswordField } from '@/components/PasswordField';
 import { PlanSubscribeSheet } from '@/components/PlanSubscribeSheet';
-import { planStatusLabel, SettingsMorePanel } from '@/components/SettingsMorePanel';
+import { SettingsMorePanel } from '@/components/SettingsMorePanel';
 
 export function SettingsForm({ compact = false }: { compact?: boolean }) {
   return (
@@ -495,76 +494,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
         </button>
       </form>
 
-      <form onSubmit={(e) => void changePassword(e)} className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-        <h2 className="text-base font-semibold">{user.hasPassword ? 'Change password' : 'Set a password'}</h2>
-        {passwordLocked ? (
-          <p className="text-sm text-[var(--muted)]">Password can change in {formatCooldown(passwordWait)}.</p>
-        ) : user.hasPassword ? (
-          <p className="text-sm text-[var(--muted)]">Password can change every 3 days after a change.</p>
-        ) : (
-          <p className="text-sm text-[var(--muted)]">Add a password so you can also sign in with email.</p>
-        )}
-        {user.hasPassword ? (
-          <PasswordField
-            placeholder="Current password"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            required
-            disabled={passwordLocked}
-          />
-        ) : (
-          <p className="text-sm text-[var(--muted)]">You signed in with a connected account. You can add a password to also log in with email.</p>
-        )}
-        <PasswordField
-          placeholder="New password (10+ characters)"
-          minLength={10}
-          maxLength={128}
-          autoComplete="new-password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-          required
-          disabled={passwordLocked}
-        />
-        <PasswordField
-          placeholder="Confirm new password"
-          minLength={10}
-          maxLength={128}
-          autoComplete="new-password"
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
-          required
-          disabled={passwordLocked}
-        />
-        {passwordError ? <p className="text-sm text-red-600">{passwordError}</p> : null}
-        <button
-          className="flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold active:bg-[var(--bg)] disabled:opacity-60"
-          type="submit"
-          disabled={passwordLocked}
-        >
-          {passwordSaved ? 'Updated' : user.hasPassword ? 'Update password' : 'Set password'}
-        </button>
-      </form>
-
       {compact ? null : <LegalLinks className="mt-10" />}
-      <div className="mt-8 space-y-3 border-t border-[var(--line)] pt-5">
-        <h2 className="text-base font-semibold">Subscription</h2>
-        <p className="text-sm text-[var(--muted)]">
-          {user.planTier
-            ? `${planStatusLabel(user.planTier)} plan active${user.planUntil ? ` until ${new Date(user.planUntil).toLocaleDateString()}` : ''}.`
-            : 'Unlock longer recordings, caption edits, and delete-anytime from $1.'}
-        </p>
-        <button
-          type="button"
-          disabled={subBusy}
-          onClick={() => setPlanSheetOpen(true)}
-          className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
-        >
-          {user.planTier ? 'Change plan' : 'Subscribe'}
-        </button>
-        {subNote ? <p className="text-sm text-[var(--muted)]">{subNote}</p> : null}
-        {subError ? <p className="text-sm text-red-600">{subError}</p> : null}
-      </div>
 
       <SettingsMorePanel
         user={user}
@@ -576,6 +506,21 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
         deleteBusy={deleteBusy}
         deleteError={deleteError}
         onDeleteAccount={() => void deleteAccount()}
+        currentPassword={currentPassword}
+        setCurrentPassword={setCurrentPassword}
+        newPassword={newPassword}
+        setNewPassword={setNewPassword}
+        confirmPassword={confirmPassword}
+        setConfirmPassword={setConfirmPassword}
+        passwordError={passwordError}
+        passwordSaved={passwordSaved}
+        passwordLocked={passwordLocked}
+        passwordWait={passwordWait}
+        onChangePassword={(e) => void changePassword(e)}
+        subNote={subNote}
+        subError={subError}
+        subBusy={subBusy}
+        onOpenPlanSheet={() => setPlanSheetOpen(true)}
       />
 
       <PlanSubscribeSheet

@@ -5,6 +5,9 @@ export const FREE_DURATION_CAPS = [30, 60, 120] as const satisfies readonly Dura
 /** Free users may delete their own posts only within this window. */
 export const FREE_POST_DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** Practical max for "unlimited" caption/comment text (DB + schema ceiling). */
+export const UNLIMITED_TEXT_LENGTH = 100_000;
+
 export const PLAN_TIERS = ['basic', 'verified', 'gold'] as const;
 export type PlanTier = (typeof PLAN_TIERS)[number];
 
@@ -30,6 +33,8 @@ export const PLAN_DEFINITIONS: Record<
     nameAccent: boolean;
     maxCaptionLength: number;
     maxCommentLength: number;
+    maxPostImages: number;
+    maxVoiceCommentSeconds: number;
   }
 > = {
   basic: {
@@ -38,14 +43,17 @@ export const PLAN_DEFINITIONS: Record<
     title: 'Voice',
     benefits: [
       'Record up to 5 minutes',
-      'Edit captions after posting',
-      'Delete posts anytime',
+      'Up to 5 photos per post',
+      'Voice replies up to 6s',
+      'Edit captions · delete anytime',
     ],
     maxDurationCap: 300,
     badge: null,
     nameAccent: false,
     maxCaptionLength: 500,
     maxCommentLength: 500,
+    maxPostImages: 5,
+    maxVoiceCommentSeconds: 6,
   },
   verified: {
     priceCents: 300,
@@ -54,14 +62,17 @@ export const PLAN_DEFINITIONS: Record<
     benefits: [
       'Blue tick on your profile',
       'Record up to 15 minutes',
-      'Edit captions after posting',
-      'Delete posts anytime',
+      'Up to 10 photos · voice replies 10s',
+      'Unlimited caption & comments',
+      'Edit captions · delete anytime',
     ],
     maxDurationCap: 900,
     badge: 'blue',
     nameAccent: false,
-    maxCaptionLength: 500,
-    maxCommentLength: 500,
+    maxCaptionLength: UNLIMITED_TEXT_LENGTH,
+    maxCommentLength: UNLIMITED_TEXT_LENGTH,
+    maxPostImages: 10,
+    maxVoiceCommentSeconds: 10,
   },
   gold: {
     priceCents: 500,
@@ -70,15 +81,17 @@ export const PLAN_DEFINITIONS: Record<
     benefits: [
       'Gold tick and gold name',
       'Record up to 30 minutes',
-      'Edit captions after posting',
-      'Delete posts anytime',
-      'Longer captions and comments',
+      'Up to 20 photos · voice replies 15s',
+      'Unlimited caption & comments',
+      'Edit captions · delete anytime',
     ],
     maxDurationCap: 1800,
     badge: 'gold',
     nameAccent: true,
-    maxCaptionLength: 1000,
-    maxCommentLength: 1000,
+    maxCaptionLength: UNLIMITED_TEXT_LENGTH,
+    maxCommentLength: UNLIMITED_TEXT_LENGTH,
+    maxPostImages: 20,
+    maxVoiceCommentSeconds: 15,
   },
 };
 
@@ -159,14 +172,32 @@ export function canUseDurationCap(cap: number, tier: PlanTier | null | undefined
   return allowedDurationCaps(tier).includes(cap as DurationCap);
 }
 
+/** Free (null) uses basic's 500. */
 export function maxCaptionLength(tier: PlanTier | null | undefined): number {
   if (!tier) return PLAN_DEFINITIONS.basic.maxCaptionLength;
   return PLAN_DEFINITIONS[tier].maxCaptionLength;
 }
 
+/** Free (null) uses basic's 500. */
 export function maxCommentLength(tier: PlanTier | null | undefined): number {
   if (!tier) return PLAN_DEFINITIONS.basic.maxCommentLength;
   return PLAN_DEFINITIONS[tier].maxCommentLength;
+}
+
+/** Free: 2 images. */
+export function maxPostImages(tier: PlanTier | null | undefined): number {
+  if (!tier) return 2;
+  return PLAN_DEFINITIONS[tier].maxPostImages;
+}
+
+/** Free: 0 (no voice replies). */
+export function maxVoiceCommentSeconds(tier: PlanTier | null | undefined): number {
+  if (!tier) return 0;
+  return PLAN_DEFINITIONS[tier].maxVoiceCommentSeconds;
+}
+
+export function canVoiceComment(tier: PlanTier | null | undefined): boolean {
+  return maxVoiceCommentSeconds(tier) > 0;
 }
 
 export function comparePlanTier(a: PlanTier, b: PlanTier): number {

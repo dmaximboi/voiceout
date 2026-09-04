@@ -7,12 +7,14 @@ import {
   MAX_AVATAR_BYTES,
   MAX_POST_IMAGE_BYTES,
   canUseDurationCap,
+  canVoiceComment,
   isAllowedAudioMime,
   isAllowedAvatarMime,
   matchesUploadMagic,
+  looksLikeHostileUpload,
+  maxVoiceCommentSeconds,
   sniffUploadMime,
   uploadIntentSchema,
-  type DurationCap,
 } from '@voiceout/shared';
 import { requireAuth, requireCsrf, requireInternal, requireVerifiedIdentity } from '../plugins/auth.js';
 import { assertFlag } from '../lib/flags.js';
@@ -49,12 +51,28 @@ export async function mediaRoutes(app: FastifyInstance) {
     } else {
       requireVerifiedIdentity(req);
       if (!isAllowedAudioMime(body.mime)) return reply.code(400).send({ error: 'Bad audio type' });
-      const cap = body.durationCap as DurationCap | undefined;
+      const cap = body.durationCap;
       if (!cap || !(cap in MAX_AUDIO_BYTES)) return reply.code(400).send({ error: 'Duration cap required' });
       if (body.kind === 'post_audio' && !canUseDurationCap(cap, req.authUser!.planTier)) {
         return reply.code(403).send({ error: 'Upgrade your plan for that length', code: 'PLAN_REQUIRED' });
       }
-      if (body.bytes > MAX_AUDIO_BYTES[cap]) return reply.code(400).send({ error: 'Audio too large for cap' });
+      if (body.kind === 'comment_audio') {
+        if (!canVoiceComment(req.authUser!.planTier)) {
+          return reply.code(403).send({
+            error: 'Subscribe from $1 to send voice replies',
+            code: 'PLAN_REQUIRED',
+          });
+        }
+        if (cap > maxVoiceCommentSeconds(req.authUser!.planTier)) {
+          return reply.code(403).send({
+            error: 'Voice reply too long for your plan',
+            code: 'PLAN_REQUIRED',
+          });
+        }
+      }
+      if (body.bytes > MAX_AUDIO_BYTES[cap as keyof typeof MAX_AUDIO_BYTES]) {
+        return reply.code(400).send({ error: 'Audio too large for cap' });
+      }
     }
     await assertDailyQuota(app.redis, 'upload', req.authUser!.id);
     const id = randomUUID();
@@ -109,6 +127,9 @@ export async function mediaRoutes(app: FastifyInstance) {
       }
       if (!matchesUploadMagic(declared || media.mime, buf)) {
         return reply.code(400).send({ error: 'File type does not match' });
+      }
+      if (looksLikeHostileUpload(buf)) {
+        return reply.code(400).send({ error: 'File rejected by security filter' });
       }
       const maxBytes = uploadMaxBytes(media.kind, media.durationCap);
       if (maxBytes && buf.length > maxBytes) return reply.code(400).send({ error: 'File too large' });
@@ -227,7 +248,7 @@ function uploadMaxBytes(kind: string, durationCap: number | null) {
   if (kind === 'avatar') return MAX_AVATAR_BYTES;
   if (kind === 'post_image') return MAX_POST_IMAGE_BYTES;
   if (durationCap && durationCap in MAX_AUDIO_BYTES) {
-    return MAX_AUDIO_BYTES[durationCap as DurationCap];
+    return MAX_AUDIO_BYTES[durationCap as keyof typeof MAX_AUDIO_BYTES];
   }
   return MAX_AUDIO_BYTES[60];
 }

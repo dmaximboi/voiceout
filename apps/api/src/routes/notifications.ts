@@ -111,4 +111,11 @@ export async function notificationRoutes(app: FastifyInstance) {
     }
     return { ok: true };
   });
+
+  app.delete('/notifications', async (req, reply) => {
+    requireAuth(req, reply);
+    requireCsrf(req);
+    await app.db.delete(notifications).where(eq(notifications.userId, req.authUser!.id));
+    return { ok: true };
+  });
 }

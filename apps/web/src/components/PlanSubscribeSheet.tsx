@@ -1,7 +1,7 @@
 'use client';
 
 import type { PlanTier } from '@voiceout/shared';
-import { PLAN_DEFINITIONS, comparePlanTier, planList } from '@voiceout/shared';
+import { comparePlanTier, planList } from '@voiceout/shared';
 import { X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 
@@ -57,7 +57,6 @@ export function PlanSubscribeSheet({
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
           {planList().map(({ tier, priceLabel, title, benefits }) => {
             const owned = currentTier && comparePlanTier(currentTier, tier) >= 0;
-            const def = PLAN_DEFINITIONS[tier];
             return (
               <div key={tier} className="rounded-2xl border border-[var(--line)] p-4">
                 <div className="flex items-baseline justify-between gap-2">
@@ -77,9 +76,6 @@ export function PlanSubscribeSheet({
                 >
                   {owned ? 'Current plan' : busyTier === tier ? 'Opening checkout…' : `Subscribe ${priceLabel}`}
                 </button>
-                {tier === 'gold' ? (
-                  <p className="mt-2 text-xs text-[var(--muted)]">Up to {def.maxCaptionLength} characters on posts and comments.</p>
-                ) : null}
               </div>
             );
           })}

@@ -3,6 +3,7 @@ import {
   auditLogs,
   comments,
   mediaObjects,
+  notifications,
   oauthAccounts,
   posts,
   reports,
@@ -116,6 +117,9 @@ export async function cryptographicallyEraseUser(
     await tx.execute(sql`select set_config('app.allow_password', 'on', true)`);
     await tx.execute(sql`select set_config('app.rls', 'off', true)`);
     await tx.delete(userKeys).where(eq(userKeys.userId, userId));
+    await tx.delete(notifications).where(
+      or(eq(notifications.userId, userId), eq(notifications.actorId, userId)),
+    );
     await tx.delete(comments).where(eq(comments.authorId, userId));
     await tx.delete(posts).where(eq(posts.authorId, userId));
     await tx.delete(reports).where(
@@ -124,6 +128,7 @@ export async function cryptographicallyEraseUser(
     await tx.delete(auditLogs).where(eq(auditLogs.userId, userId));
     await tx.delete(sessions).where(eq(sessions.userId, userId));
     await tx.delete(oauthAccounts).where(eq(oauthAccounts.userId, userId));
+    await tx.delete(mediaObjects).where(eq(mediaObjects.userId, userId));
     await tx.delete(users).where(eq(users.id, userId));
   });
 

@@ -10,14 +10,17 @@ import {
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   COMMENT_CATEGORIES,
+  DURATION_PROBE_SLACK_MS,
   canDeleteOwnPost,
   canEditPostCaption,
   canUseDurationCap,
+  canVoiceComment,
   createCommentSchema,
   createPostSchema,
   maxCaptionLength,
   maxCommentLength,
-  MAX_POST_IMAGES,
+  maxPostImages,
+  maxVoiceCommentSeconds,
   reactSchema,
   reportSchema,
   updatePostCaptionSchema,
@@ -30,6 +33,7 @@ import { hydratePosts } from '../lib/hydrate.js';
 import { withIdempotency } from '../lib/idempotency.js';
 import { notify, notifyFollowersOfPost } from '../lib/notify.js';
 import { enqueue } from '../lib/queue.js';
+import { deleteObject } from '../lib/s3.js';
 import { assertDailyQuota } from '../lib/quota.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { publicMediaUrl } from '../lib/s3.js';
@@ -54,7 +58,7 @@ export async function postRoutes(app: FastifyInstance) {
     if (!canUseDurationCap(body.durationCap, req.authUser!.planTier)) {
       return reply.code(403).send({ error: 'Upgrade your plan for that recording length', code: 'PLAN_REQUIRED' });
     }
-    const imageIds = [...new Set(body.imageIds ?? [])].slice(0, MAX_POST_IMAGES);
+    const imageIds = [...new Set(body.imageIds ?? [])].slice(0, maxPostImages(req.authUser!.planTier));
     if (imageIds.length) {
       const images = await app.db
         .select()
@@ -188,6 +192,19 @@ export async function postRoutes(app: FastifyInstance) {
       .where(and(eq(posts.id, id), eq(posts.authorId, req.authUser!.id)))
       .returning();
     if (deleted.length === 0) return reply.code(404).send({ error: 'Not found' });
+    const gone = deleted[0]!;
+    const mediaIds = [gone.mediaId, ...(gone.imageIds ?? [])].filter(Boolean);
+    if (mediaIds.length) {
+      const mediaRows = await app.db.select().from(mediaObjects).where(inArray(mediaObjects.id, mediaIds));
+      await app.db.delete(mediaObjects).where(inArray(mediaObjects.id, mediaIds));
+      for (const row of mediaRows) {
+        try {
+          await deleteObject(app.env, app.s3, row.objectKey);
+        } catch (err) {
+          req.log.warn({ err, key: row.objectKey }, 'post delete media purge failed');
+        }
+      }
+    }
     await writeAudit(app.db, req, 'post_delete');
     return { ok: true };
   });
@@ -310,12 +327,23 @@ export async function postRoutes(app: FastifyInstance) {
       replyToUserId = parent.authorId;
     }
     if (body.mediaId) {
+      if (!canVoiceComment(req.authUser!.planTier)) {
+        return reply.code(403).send({
+          error: 'Subscribe from $1 to send voice replies',
+          code: 'PLAN_REQUIRED',
+        });
+      }
       const [media] = await app.db
         .select()
         .from(mediaObjects)
         .where(and(eq(mediaObjects.id, body.mediaId), eq(mediaObjects.userId, req.authUser!.id)))
         .limit(1);
       if (!media || media.kind !== 'comment_audio') return reply.code(400).send({ error: 'Invalid media' });
+      const maxMs = maxVoiceCommentSeconds(req.authUser!.planTier) * 1000;
+      const durationMs = media.durationMs ?? (media.durationCap ? media.durationCap * 1000 : null);
+      if (durationMs != null && durationMs > maxMs + DURATION_PROBE_SLACK_MS) {
+        return reply.code(400).send({ error: `Voice reply max ${maxVoiceCommentSeconds(req.authUser!.planTier)}s on your plan` });
+      }
     }
     const cleanBody = sanitizeText(body.body ?? '');
     const commentLimit = maxCommentLength(req.authUser!.planTier);

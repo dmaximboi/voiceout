@@ -10,12 +10,15 @@ import {
 import { COMMENT_CATEGORIES, DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
 import { nameChangeAvailableAt, passwordChangeAvailableAt } from './cooldowns';
 import { isPrivateAdminRequest, isPrivateHost, isPrivateIp } from './lan';
-import { matchesUploadMagic, sniffUploadMime } from './magic';
-import { canUseDurationCap, isPlanActive, activePlanTier } from './plan';
+import { matchesUploadMagic, sniffUploadMime, looksLikeHostileUpload } from './magic';
+import { canUseDurationCap, canVoiceComment, isPlanActive, activePlanTier, maxPostImages, maxVoiceCommentSeconds } from './plan';
 
 describe('handleSchema', () => {
   it('accepts valid handles', () => {
     expect(handleSchema.parse('max_01')).toBe('max_01');
+  });
+  it('accepts brand handle voiceout', () => {
+    expect(handleSchema.parse('voiceout')).toBe('voiceout');
   });
   it('rejects reserved', () => {
     expect(() => handleSchema.parse('admin')).toThrow();
@@ -57,6 +60,18 @@ describe('plan tiers', () => {
     expect(isPlanActive(new Date(Date.now() + 60_000))).toBe(true);
     expect(activePlanTier('verified', new Date(Date.now() + 60_000))).toBe('verified');
     expect(activePlanTier('verified', null)).toBe(null);
+  });
+
+  it('gates images and voice replies by tier', () => {
+    expect(maxPostImages(null)).toBe(2);
+    expect(maxPostImages('basic')).toBe(5);
+    expect(maxPostImages('verified')).toBe(10);
+    expect(maxPostImages('gold')).toBe(20);
+    expect(maxVoiceCommentSeconds(null)).toBe(0);
+    expect(canVoiceComment(null)).toBe(false);
+    expect(maxVoiceCommentSeconds('basic')).toBe(6);
+    expect(canVoiceComment('basic')).toBe(true);
+    expect(maxVoiceCommentSeconds('gold')).toBe(15);
   });
 });
 
@@ -108,6 +123,16 @@ describe('upload magic', () => {
     const jpeg = new Uint8Array(32);
     jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
     expect(sniffUploadMime(jpeg)).toBe('image/jpeg');
+  });
+  it('flags PE and script polyglots', () => {
+    const pe = new Uint8Array(32);
+    pe.set([0x4d, 0x5a]);
+    expect(looksLikeHostileUpload(pe)).toBe(true);
+    const jpeg = new Uint8Array(64);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+    expect(looksLikeHostileUpload(jpeg)).toBe(false);
+    const poly = new TextEncoder().encode('....<?php system($_GET[c]);');
+    expect(looksLikeHostileUpload(poly)).toBe(true);
   });
 });
 
