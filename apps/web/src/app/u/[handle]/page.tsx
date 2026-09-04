@@ -202,6 +202,7 @@ export default function ProfilePage() {
             key={p.id}
             post={p}
             onChange={(next) => setPosts((all) => all.map((x) => (x.id === next.id ? next : x)))}
+            onRemove={(id) => setPosts((all) => all.filter((x) => x.id !== id))}
           />
         ))
       ) : (

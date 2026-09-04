@@ -552,7 +552,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
         <p className="text-sm text-[var(--muted)]">
           {user.planTier
             ? `${planStatusLabel(user.planTier)} plan active${user.planUntil ? ` until ${new Date(user.planUntil).toLocaleDateString()}` : ''}.`
-            : 'Unlock longer recordings and profile perks.'}
+            : 'Unlock longer recordings, caption edits, and delete-anytime from $1.'}
         </p>
         <button
           type="button"

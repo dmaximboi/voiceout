@@ -132,6 +132,7 @@ export default function MePage() {
               onChange={(next) =>
                 setVoiced((all) => all.map((x) => (x.post.id === next.id ? { ...x, post: next } : x)))
               }
+              onRemove={(id) => setVoiced((all) => all.filter((x) => x.post.id !== id))}
             />
           </div>
         ))
@@ -144,6 +145,11 @@ export default function MePage() {
               const patch = (all: PostCard[]) => all.map((x) => (x.id === next.id ? next : x));
               if (tab === 'posts') setPosts(patch);
               else setBookmarks(patch);
+            }}
+            onRemove={(id) => {
+              const drop = (all: PostCard[]) => all.filter((x) => x.id !== id);
+              if (tab === 'posts') setPosts(drop);
+              else setBookmarks(drop);
             }}
           />
         ))

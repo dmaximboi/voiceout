@@ -25,6 +25,7 @@ export default function TrendingPage() {
         autoPlay
         posts={posts}
         onChange={(next) => setPosts((all) => all.map((x) => (x.id === next.id ? next : x)))}
+        onRemove={(id) => setPosts((all) => all.filter((x) => x.id !== id))}
       />
     </div>
   );
