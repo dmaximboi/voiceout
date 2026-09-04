@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { oauthAccounts, sessions, users } from '@voiceout/db';
-import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
+import { oauthAccounts, sessions, users, deviceLinks } from '@voiceout/db';
+import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '@voiceout/shared';
 import { hashPassword, randomToken, sha256, verifyPassword } from '../lib/crypto.js';
 import { sendMail } from '../lib/mail.js';
@@ -73,8 +73,7 @@ export async function authRoutes(app: FastifyInstance) {
       const verifyUrl = `${app.env.WEB_ORIGIN}/login?verify=${verifyToken}`;
       await sendMail(app.env, req.log, {
         to: sealed.email,
-        subject: 'Verify your VoiceOut email',
-        text: `Confirm your email: ${verifyUrl}`,
+        kind: 'verify_email',
         url: verifyUrl,
       });
       return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
@@ -193,8 +192,7 @@ export async function authRoutes(app: FastifyInstance) {
       const url = `${app.env.WEB_ORIGIN}/login?reset=${token}`;
       await sendMail(app.env, req.log, {
         to: user.email,
-        subject: 'Reset your VoiceOut password',
-        text: `Reset your password (expires in 1 hour): ${url}`,
+        kind: 'reset_password',
         url,
       });
     }
@@ -241,8 +239,7 @@ export async function authRoutes(app: FastifyInstance) {
     const url = `${app.env.WEB_ORIGIN}/login?verify=${token}`;
     await sendMail(app.env, req.log, {
       to: user.email,
-      subject: 'Verify your VoiceOut email',
-      text: `Confirm your email: ${url}`,
+      kind: 'verify_email',
       url,
     });
     return { ok: true };
@@ -566,10 +563,76 @@ export async function authRoutes(app: FastifyInstance) {
         userAgent: req.headers['user-agent'],
         ip: req.ip,
       });
-      const k = await issueHandoff(app.redis, tokens);
-      return { k };
+      const k = await issueHandoff(app.redis, {
+        access: tokens.access,
+        refresh: tokens.refresh,
+        csrf: tokens.csrf,
+      });
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      const [row] = await app.db
+        .insert(deviceLinks)
+        .values({
+          userId: req.authUser!.id,
+          sessionId: tokens.sessionId,
+          tokenHash: sha256(k),
+          label: 'Phone link',
+          expiresAt,
+        })
+        .returning();
+      return {
+        k,
+        link: row
+          ? {
+              id: row.id,
+              label: row.label,
+              createdAt: row.createdAt.toISOString(),
+              expiresAt: row.expiresAt.toISOString(),
+              claimedAt: null as string | null,
+              revokedAt: null as string | null,
+            }
+          : null,
+      };
     },
   );
+
+  app.get('/auth/device-links', async (req, reply) => {
+    requireAuth(req, reply);
+    const rows = await app.db
+      .select()
+      .from(deviceLinks)
+      .where(eq(deviceLinks.userId, req.authUser!.id))
+      .orderBy(desc(deviceLinks.createdAt))
+      .limit(20);
+    return {
+      links: rows.map((r) => ({
+        id: r.id,
+        label: r.label,
+        createdAt: r.createdAt.toISOString(),
+        expiresAt: r.expiresAt.toISOString(),
+        claimedAt: r.claimedAt?.toISOString() ?? null,
+        revokedAt: r.revokedAt?.toISOString() ?? null,
+        active: !r.revokedAt && r.expiresAt > new Date(),
+      })),
+    };
+  });
+
+  app.delete('/auth/device-links/:id', async (req, reply) => {
+    requireAuth(req, reply);
+    requireCsrf(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const [row] = await app.db
+      .select()
+      .from(deviceLinks)
+      .where(and(eq(deviceLinks.id, id), eq(deviceLinks.userId, req.authUser!.id)))
+      .limit(1);
+    if (!row) return reply.code(404).send({ error: 'Not found' });
+    await app.db
+      .update(deviceLinks)
+      .set({ revokedAt: new Date() })
+      .where(eq(deviceLinks.id, row.id));
+    await app.db.delete(sessions).where(eq(sessions.id, row.sessionId));
+    return { ok: true };
+  });
 
   app.post(
     '/auth/switch-device',
@@ -619,8 +682,8 @@ export async function authRoutes(app: FastifyInstance) {
       const code = await issueOtpCode(app.redis, 'vo:admin-stepup-otp', user.id, {});
       await sendMail(app.env, req.log, {
         to: user.email,
-        subject: 'VoiceOut panel confirmation code',
-        text: `Your confirmation code is ${code}. It expires in 10 minutes.`,
+        kind: 'admin_stepup_code',
+        code,
       });
       await writeAudit(app.db, req, 'admin_stepup_code', req.authUser!.id);
       return { ok: true };
@@ -669,15 +732,35 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/auth/handoff', async (req, reply) => {
     const origin = requestWebOrigin(req, app.env);
     const q = req.query as { k?: string; next?: string };
-    if (!q.k) return reply.redirect(`${origin}/login?error=oauth`);
-    const raw = await app.redis.get(`vo:handoff:${q.k}`);
-    if (!raw) return reply.redirect(`${origin}/login?error=oauth`);
-    await app.redis.del(`vo:handoff:${q.k}`);
+    // Do not consume here — chat apps prefetch GET links and would burn one-time keys.
+    const params = new URLSearchParams();
+    if (q.k) params.set('k', q.k);
+    params.set('next', safeNext(q.next));
+    return reply.redirect(`${origin}/device-login?${params.toString()}`);
+  });
+
+  app.post('/auth/handoff/claim', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+    requireCsrf(req);
+    const body = z.object({ k: z.string().min(8).max(128), next: z.string().optional() }).parse(req.body ?? {});
+    const tokenHash = sha256(body.k);
+    const [link] = await app.db.select().from(deviceLinks).where(eq(deviceLinks.tokenHash, tokenHash)).limit(1);
+    if (link?.revokedAt) return reply.code(400).send({ error: 'Link revoked' });
+    if (link && link.expiresAt < new Date()) return reply.code(400).send({ error: 'Link expired' });
+    const raw = await app.redis.get(`vo:handoff:${body.k}`);
+    if (!raw) return reply.code(400).send({ error: 'Link expired or already used' });
+    await app.redis.del(`vo:handoff:${body.k}`);
     const tokens = JSON.parse(raw) as { access: string; refresh: string; csrf: string };
+    const origin = requestWebOrigin(req, app.env);
     setAuthCookies(reply, app.env, tokens.access, tokens.refresh, tokens.csrf, {
       secure: origin.startsWith('https://'),
     });
-    return reply.redirect(`${origin}${safeNext(q.next)}`);
+    if (link) {
+      await app.db
+        .update(deviceLinks)
+        .set({ claimedAt: new Date() })
+        .where(and(eq(deviceLinks.id, link.id), isNull(deviceLinks.claimedAt)));
+    }
+    return { ok: true, next: safeNext(body.next) };
   });
 }
 

@@ -36,11 +36,13 @@ export type MeUser = PublicUser & {
   /** @deprecated use planUntil */
   studioUntil: string | null;
   nameChangeAvailableAt: string;
+  avatarChangeAvailableAt: string;
   passwordChangeAvailableAt: string;
 };
 
 export type PostCard = {
   id: string;
+  shareCode: string;
   author: PublicUser;
   caption: string;
   durationMs: number;

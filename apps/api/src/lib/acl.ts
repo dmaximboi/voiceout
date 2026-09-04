@@ -24,6 +24,8 @@ export function isOpenRoute(method: string, route: string) {
     route !== '/auth/me' &&
     route !== '/auth/resend-verify' &&
     route !== '/auth/device-link' &&
+    route !== '/auth/device-links' &&
+    !route.startsWith('/auth/device-links/') &&
     route !== '/auth/switch-device' &&
     route !== '/auth/admin-stepup' &&
     route !== '/auth/admin-stepup/code' &&

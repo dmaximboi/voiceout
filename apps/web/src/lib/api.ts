@@ -78,7 +78,7 @@ async function apiInner<T>(path: string, init: ApiInit = {}): Promise<T> {
     credentials: 'include',
     headers,
   });
-  if (res.status === 401 && path !== '/auth/me' && path !== '/auth/refresh') {
+  if (res.status === 401 && path !== '/auth/refresh') {
     const refreshed = await fetch(`${API}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',

@@ -131,6 +131,7 @@ export default function ProfilePage() {
                     className="flex min-h-11 w-full items-center px-4 text-left text-sm text-red-600"
                     onClick={() => {
                       setMenuOpen(false);
+                      if (!user) return;
                       setReportOpen(true);
                     }}
                   >

@@ -129,6 +129,7 @@ export async function hydratePosts(
       .filter((u): u is string => Boolean(u));
     cards.push({
       id: p.id,
+      shareCode: p.shareCode,
       author: await toPublicUser(db, env, s3, author),
       caption: p.caption,
       durationMs: p.durationMs,

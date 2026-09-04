@@ -21,7 +21,7 @@ const description =
 export const metadata: Metadata = {
   metadataBase: new URL(site),
   title: {
-    default: 'VoiceOut — voice-first social',
+    default: 'VoiceOut voice-first social',
     template: '%s · VoiceOut',
   },
   description,
@@ -36,13 +36,13 @@ export const metadata: Metadata = {
     locale: 'en_US',
     url: site,
     siteName: 'VoiceOut',
-    title: 'VoiceOut — voice-first social',
+    title: 'VoiceOut voice-first social',
     description,
     images: [{ url: '/logo.png', width: 512, height: 512, alt: 'VoiceOut' }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'VoiceOut — voice-first social',
+    title: 'VoiceOut voice-first social',
     description,
     images: ['/logo.png'],
   },

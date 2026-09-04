@@ -6,12 +6,22 @@ export async function notify(
   input: {
     userId: string;
     actorId: string;
-    type: 'follow' | 'comment' | 'reaction' | 'comment_like' | 'follow_post' | 'trending' | 'repost' | 'bookmark';
+    type:
+      | 'follow'
+      | 'comment'
+      | 'reaction'
+      | 'comment_like'
+      | 'follow_post'
+      | 'trending'
+      | 'repost'
+      | 'bookmark'
+      | 'account_warning';
     postId?: string | null;
     commentId?: string | null;
+    message?: string | null;
   },
 ) {
-  if (input.userId === input.actorId) return;
+  if (input.userId === input.actorId && input.type !== 'account_warning') return;
   if (input.type === 'follow') {
     const [existing] = await db
       .select({ id: notifications.id })
@@ -32,6 +42,7 @@ export async function notify(
     type: input.type,
     postId: input.postId ?? null,
     commentId: input.commentId ?? null,
+    message: input.message ?? null,
   });
 }
 

@@ -9,6 +9,7 @@ import { FeedList } from '@/components/FeedList';
 import { FeedSkeleton } from '@/components/FeedSkeleton';
 import { SAMPLE_POSTS } from '@/lib/samplePosts';
 import { restoreRemovedPosts } from '@/lib/safetyState';
+import { GuestHome } from '@/components/GuestHome';
 
 type Tab = 'feed' | 'trending';
 type RemovedPost = { post: PostCard; index: number };
@@ -158,6 +159,10 @@ export default function HomePage() {
 
   const posts = tab === 'feed' ? feedPosts : trendPosts;
   const loading = tab === 'feed' ? loadingFeed : loadingTrend;
+
+  if (!authLoading && !user) {
+    return <GuestHome />;
+  }
 
   function patch(next: PostCard) {
     const apply = (all: PostCard[]) => all.map((x) => (x.id === next.id ? next : x));

@@ -145,10 +145,9 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
     e.preventDefault();
     setError(null);
     try {
-      const renaming =
-        Boolean(user) && (displayName !== user!.displayName || handle !== user!.handle);
-      if (renaming && !nameCodeSent) {
-        setError('Request a verification code before changing your name or username');
+      const handleChanging = Boolean(user) && handle !== user!.handle;
+      if (handleChanging && !nameCodeSent) {
+        setError('Request a verification code before changing your username');
         return;
       }
       await api('/users/me', {
@@ -157,7 +156,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
           displayName,
           handle,
           bio,
-          ...(renaming ? { verificationCode: nameCode } : {}),
+          ...(handleChanging ? { verificationCode: nameCode } : {}),
         }),
       });
       await refresh();
@@ -177,7 +176,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
     try {
       await api('/users/me/name-code', {
         method: 'POST',
-        body: JSON.stringify({ displayName, handle }),
+        body: JSON.stringify({ handle }),
       });
       setNameCodeSent(true);
     } catch (err) {
@@ -277,7 +276,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
     setPhoneBusy(true);
     try {
       const { k } = await api<{ k: string }>('/auth/device-link', { method: 'POST', body: '{}' });
-      setPhoneLink(`${window.location.origin}/vo-api/auth/handoff?k=${encodeURIComponent(k)}&next=/settings`);
+      setPhoneLink(`${window.location.origin}/device-login?k=${encodeURIComponent(k)}&next=/settings`);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Could not make a phone link');
@@ -322,10 +321,12 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
   }
 
   const nameWait = Math.max(0, new Date(user.nameChangeAvailableAt).getTime() - Date.now());
+  const avatarWait = Math.max(0, new Date(user.avatarChangeAvailableAt ?? 0).getTime() - Date.now());
   const passwordWait = Math.max(0, new Date(user.passwordChangeAvailableAt).getTime() - Date.now());
-  const nameLocked = nameWait > 0;
+  const handleLocked = nameWait > 0;
+  const avatarLocked = avatarWait > 0;
   const passwordLocked = passwordWait > 0 && user.hasPassword;
-  const renaming = displayName !== user.displayName || handle !== user.handle;
+  const handleChanging = handle !== user.handle;
 
   return (
     <div className={compact ? 'px-4 py-3' : 'px-4 py-6'}>
@@ -410,12 +411,13 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
 
       <div className={`flex items-center gap-4 ${compact ? '' : 'mt-6'}`}>
         <Avatar name={user.displayName} src={user.avatarUrl} size={compact ? 'sm' : 'lg'} />
-        <label className="text-sm font-medium text-accent">
-          Change photo
+        <label className={`text-sm font-medium ${avatarLocked ? 'text-[var(--muted)]' : 'text-accent'}`}>
+          {avatarLocked ? `Photo locked ${formatCooldown(avatarWait)}` : 'Change photo'}
           <input
             className="sr-only"
             type="file"
             accept="image/jpeg,image/png,image/webp"
+            disabled={avatarLocked}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) void onAvatar(f);
@@ -428,11 +430,10 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
         <label className="block text-sm font-medium">
           Name
           <input
-            className="mt-1 w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base font-normal disabled:opacity-60"
+            className="mt-1 w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base font-normal"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             required
-            disabled={nameLocked}
           />
         </label>
         <label className="block text-sm font-medium">
@@ -442,18 +443,14 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
             value={handle}
             onChange={(e) => setHandle(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
             required
-            disabled={nameLocked}
+            disabled={handleLocked}
           />
         </label>
-        {nameLocked ? (
-          <p className="text-sm text-[var(--muted)]">
-            Name and username can change in {formatCooldown(nameWait)}.
-          </p>
-        ) : renaming ? (
+        {handleLocked ? (
+          <p className="text-sm text-[var(--muted)]">Username can change in {formatCooldown(nameWait)}.</p>
+        ) : handleChanging ? (
           <div className="space-y-2 rounded-xl border border-[var(--line)] p-3">
-            <p className="text-sm text-[var(--muted)]">
-              Changing name or username needs a code sent to your email.
-            </p>
+            <p className="text-sm text-[var(--muted)]">Changing username needs a code sent to your email.</p>
             <button
               type="button"
               disabled={nameCodeBusy || user.needsRealEmail || !user.isEmailVerified}
@@ -474,9 +471,7 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
             ) : null}
           </div>
         ) : (
-          <p className="text-sm text-[var(--muted)]">
-            Change your name with an email code. After a change, wait 7 days before another rename.
-          </p>
+          <p className="text-sm text-[var(--muted)]">Display name anytime. Username and photo use a short cooldown after changes.</p>
         )}
         <label className="block text-sm font-medium">
           Bio
@@ -498,9 +493,6 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
 
       <SettingsMorePanel
         user={user}
-        phoneLink={phoneLink}
-        phoneBusy={phoneBusy}
-        onMakePhoneLink={() => void makePhoneLink()}
         deleteConfirm={deleteConfirm}
         setDeleteConfirm={setDeleteConfirm}
         deleteBusy={deleteBusy}

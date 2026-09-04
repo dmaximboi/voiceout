@@ -86,14 +86,14 @@ describe('private admin hosts', () => {
 });
 
 describe('cooldowns', () => {
-  it('waits 7 days from account creation until a name change', () => {
+  it('waits 3 days from account creation until a handle change', () => {
     const created = new Date('2026-01-01T00:00:00Z');
-    expect(nameChangeAvailableAt(created, null).toISOString()).toBe('2026-01-08T00:00:00.000Z');
+    expect(nameChangeAvailableAt(created, null).toISOString()).toBe('2026-01-04T00:00:00.000Z');
   });
-  it('waits 7 days after a name change attempt', () => {
+  it('waits 3 days after a handle change attempt', () => {
     const created = new Date('2026-01-01T00:00:00Z');
     const changed = new Date('2026-02-01T00:00:00Z');
-    expect(nameChangeAvailableAt(created, changed).toISOString()).toBe('2026-02-08T00:00:00.000Z');
+    expect(nameChangeAvailableAt(created, changed).toISOString()).toBe('2026-02-04T00:00:00.000Z');
   });
   it('waits 3 days for password from creation then last change', () => {
     const created = new Date('2026-01-01T00:00:00Z');

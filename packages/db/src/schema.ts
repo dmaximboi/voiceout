@@ -71,6 +71,7 @@ export const users = pgTable(
     suspensionReason: varchar('suspension_reason', { length: 500 }),
     suspendedBy: uuid('suspended_by').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
     profileNameChangedAt: timestamp('profile_name_changed_at', { withTimezone: true }),
+    avatarChangedAt: timestamp('avatar_changed_at', { withTimezone: true }),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
     studioUntil: timestamp('studio_until', { withTimezone: true }),
     planTier: varchar('plan_tier', { length: 16 }),
@@ -228,11 +229,13 @@ export const posts = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     region: varchar('region', { length: 8 }),
+    shareCode: varchar('share_code', { length: 12 }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('posts_author_created_idx').on(t.authorId, t.createdAt),
     index('posts_status_created_idx').on(t.status, t.createdAt),
+    uniqueIndex('posts_share_code_idx').on(t.shareCode),
   ],
 );
 
@@ -605,3 +608,26 @@ export const billingWebhookEvents = pgTable('billing_webhook_events', {
   eventId: varchar('event_id', { length: 128 }).primaryKey(),
   processedAt: timestamp('processed_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const deviceLinks = pgTable(
+  'device_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    label: varchar('label', { length: 64 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('device_links_token_hash_idx').on(t.tokenHash),
+    index('device_links_user_idx').on(t.userId, t.createdAt),
+  ],
+);
