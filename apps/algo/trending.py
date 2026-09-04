@@ -37,8 +37,20 @@ def _conn() -> psycopg.Connection:
     return psycopg.connect(os.environ.get("DATABASE_OWNER_URL") or os.environ["DATABASE_URL"])
 
 
+_redis_client: redis.Redis | None = None
+
+
 def _redis() -> redis.Redis:
-    return redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    """Reuse one client — opening a connection per call burns Upstash command budget."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.Redis.from_url(
+            os.environ.get("REDIS_URL", "redis://localhost:6379"),
+            decode_responses=True,
+            socket_keepalive=True,
+            health_check_interval=60,
+        )
+    return _redis_client
 
 
 def _decode_ids(raw: str | None) -> list[str]:
@@ -264,10 +276,10 @@ def recompute_trending() -> list[str]:
     payload = {"version": 2, "computed_at": now.isoformat(), "post_ids": ids}
     signal_payload = {"version": 2, "computed_at": now.isoformat(), "signals": signals}
     r = _redis()
-    r.set(REDIS_KEY_V2, json.dumps(payload), ex=600)
-    r.set(REDIS_SIGNALS_V2, json.dumps(signal_payload), ex=600)
-    r.set(REDIS_KEY, json.dumps(ids), ex=600)
-    r.set(REDIS_SIGNALS, json.dumps(signals), ex=600)
+    # v2 only + longer TTL: half the writes, fewer refreshes on Upstash free tier.
+    ttl = int(os.environ.get("TRENDING_REDIS_TTL_SEC", "3600"))
+    r.set(REDIS_KEY_V2, json.dumps(payload), ex=ttl)
+    r.set(REDIS_SIGNALS_V2, json.dumps(signal_payload), ex=ttl)
     if ids:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute("insert into trending_snapshots (post_ids) values (%s::jsonb)", (json.dumps(ids),))

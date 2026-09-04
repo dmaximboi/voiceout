@@ -813,13 +813,18 @@ async function finishTelegramLogin(
   return { handoff: `/vo-api/auth/handoff?k=${encodeURIComponent(key)}&next=${encodeURIComponent(safeNext(next))}` };
 }
 
+let telegramPollBusyUntil = 0;
+let telegramOffsetCache: string | null = null;
+
 async function ingestTelegramStarts(app: FastifyInstance) {
   const token = app.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  const locked = await app.redis.set('vo:tg:poll', '1', 'EX', 8, 'NX');
-  if (!locked) return;
+  // In-memory throttle (was Redis SET NX + DEL every wait poll — burned Upstash during Telegram login).
+  const now = Date.now();
+  if (now < telegramPollBusyUntil) return;
+  telegramPollBusyUntil = now + 3_000;
   try {
-    const offset = await app.redis.get('vo:tg:offset');
+    const offset = telegramOffsetCache ?? (await app.redis.get('vo:tg:offset'));
     const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
     url.searchParams.set('timeout', '0');
     url.searchParams.set('allowed_updates', JSON.stringify(['message']));
@@ -852,11 +857,12 @@ async function ingestTelegramStarts(app: FastifyInstance) {
         TG_LOGIN_TTL,
       );
     }
-    if (body.result.length) await app.redis.set('vo:tg:offset', String(maxId + 1));
+    if (body.result.length) {
+      telegramOffsetCache = String(maxId + 1);
+      await app.redis.set('vo:tg:offset', telegramOffsetCache);
+    }
   } catch (err) {
     app.log.warn({ err }, 'telegram getUpdates failed');
-  } finally {
-    await app.redis.del('vo:tg:poll');
   }
 }
 
