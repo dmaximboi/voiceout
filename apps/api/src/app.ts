@@ -78,13 +78,13 @@ export async function buildApp(opts: {
     ],
   });
   await app.register(cookie, { secret: opts.env.COOKIE_SECRET });
+  // In-memory rate limit: Upstash free tier dies if every request hits Redis.
   await app.register(rateLimit, {
     global: true,
     max: opts.env.NODE_ENV === 'production' ? 180 : 400,
     timeWindow: '1 minute',
-    redis: opts.redis,
     nameSpace: 'vo-rl-',
-    // If Redis blips, do not turn every request into a 500.
+    // If store blips, do not turn every request into a 500.
     skipOnError: true,
     // No multi-strike ban — one phone + shared tunnel IP was locking people out.
     ban: 0,

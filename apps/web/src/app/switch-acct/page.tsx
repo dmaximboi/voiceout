@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
+import { notFound } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useRequireAuth } from '@/lib/auth';
 import { canViewModeration } from '@/lib/safetyState';
@@ -14,12 +15,15 @@ export default function SwitchAcctPage() {
   const [deviceMsg, setDeviceMsg] = useState<string | null>(null);
   const [deviceErr, setDeviceErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (loading) return;
+    if (!user || !canViewModeration(user.role)) notFound();
+  }, [loading, user]);
+
   if (loading || !user) {
     return <p className="p-6 text-sm text-[var(--muted)]">Checking your session.</p>;
   }
-  if (!canViewModeration(user.role)) {
-    return <p className="p-6 text-sm text-[var(--muted)]">Nothing here.</p>;
-  }
+  if (!canViewModeration(user.role)) return null;
 
   async function bindDevice() {
     setDeviceBusy(true);
@@ -73,15 +77,13 @@ export default function SwitchAcctPage() {
         />
       </div>
 
-      {user.role === 'admin' || user.role === 'moderator' ? (
-        <p className="mt-6 text-sm">
-          Open the full console at{' '}
-          <a href="/admin" className="font-semibold text-accent underline">
-            /admin
-          </a>
-          .
-        </p>
-      ) : null}
+      <p className="mt-6 text-sm">
+        Open the full console at{' '}
+        <a href="/admin" className="font-semibold text-accent underline">
+          /admin
+        </a>
+        .
+      </p>
       {user.role === 'admin' ? <StudioGrant unlocked={step.unlocked} onNeedUnlock={() => void step.refresh()} /> : null}
       <ModeratorPanel
         role={user.role as 'moderator' | 'admin'}
@@ -99,34 +101,33 @@ function StudioGrant({ unlocked, onNeedUnlock }: { unlocked: boolean; onNeedUnlo
 
   async function grant(event: FormEvent) {
     event.preventDefault();
-    setError(null);
     setMessage(null);
+    setError(null);
     if (!unlocked) {
-      setError('Unlock the panel first (step 2).');
+      setError('Unlock the panel first.');
       onNeedUnlock();
       return;
     }
     try {
-      const data = await api<{ users: Array<{ id: string; handle: string }> }>(
-        `/search/users?q=${encodeURIComponent(query.trim())}`,
+      const data = await api<{ users: { id: string; handle: string }[] }>(
+        `/admin/users/search?q=${encodeURIComponent(query.trim())}`,
       );
-      const match = data.users.find((row) => row.handle === query.trim().toLowerCase()) ?? data.users[0];
+      const match = data.users.find((u) => u.handle.toLowerCase() === query.trim().toLowerCase()) ?? data.users[0];
       if (!match) {
-        setError('No user found');
+        setError('No user found.');
         return;
       }
       await api(`/admin/users/${match.id}/studio`, { method: 'POST', body: JSON.stringify({ days: 30 }) });
-      setMessage(`Studio granted to @${match.handle} for 30 days`);
+      setMessage(`Studio granted to @${match.handle} for 30 days.`);
     } catch (err) {
-      const msg = err instanceof ApiError || err instanceof Error ? err.message : 'Could not grant studio';
-      setError(msg);
+      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Grant failed');
       if (err instanceof ApiError && err.extra.code === 'ADMIN_STEPUP_REQUIRED') onNeedUnlock();
     }
   }
 
   return (
     <form onSubmit={(e) => void grant(e)} className="mt-6 space-y-2 rounded-2xl border border-[var(--line)] p-4">
-      <h2 className="text-base font-semibold">Grant Voice studio</h2>
+      <h2 className="text-base font-semibold">Quick studio grant</h2>
       <input
         className="min-h-11 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3"
         placeholder="Handle"

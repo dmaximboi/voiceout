@@ -37,6 +37,8 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional().default(''),
   MAIL_FROM: z.string().optional().default('VoiceOut <noreply@localhost>'),
   ADMIN_TOKEN: z.string().optional().default(''),
+  /** Comma-separated emails auto-promoted to admin on /auth/me and login. */
+  ADMIN_EMAILS: z.string().optional().default(''),
   ADMIN_LAN_ONLY: z.string().optional().default(''),
   BACHS_API_KEY: z.string().optional().default(''),
   BACHS_WEBHOOK_SECRET: z.string().optional().default(''),

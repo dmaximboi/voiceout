@@ -117,7 +117,7 @@ export default function HomePage() {
     const poll = window.setInterval(() => {
       void loadFeed(false);
       void loadTrend(false);
-    }, 20_000);
+    }, 60_000);
     function onRefresh() {
       void loadFeed(false);
       void loadTrend(false);

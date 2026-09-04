@@ -144,7 +144,7 @@ const trendingWorker = new Worker(
 );
 
 const trendingQ = new Queue('trending', { connection: redis });
-await trendingQ.add('recompute', {}, { repeat: { every: 5 * 60 * 1000 }, jobId: 'trending-repeat' });
+await trendingQ.add('recompute', {}, { repeat: { every: 30 * 60 * 1000 }, jobId: 'trending-repeat' });
 
 const http = await import('node:http');
 http
