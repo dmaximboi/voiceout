@@ -3,15 +3,13 @@
 import {
   DURATION_CAP_LABELS,
   FREE_DURATION_CAPS,
-  MAX_POST_IMAGES,
-  PLAN_DEFINITIONS,
   allowedDurationCaps,
   canUseDurationCap,
   maxCaptionLength,
+  maxPostImages,
   type DurationCap,
 } from '@voiceout/shared';
 import { ImagePlus, Loader2, Mic, Pause, Play, Square, Trash2, X } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { api, uploadAudio, uploadPostImage } from '@/lib/api';
@@ -39,8 +37,12 @@ function RecordPageInner() {
   const searchParams = useSearchParams();
   const planTier = user?.planTier ?? null;
   const caps = planTier ? allowedDurationCaps(planTier) : FREE_DURATION_CAPS;
+  const imageLimit = maxPostImages(planTier);
+  const captionLimit = maxCaptionLength(planTier);
   const [cap, setCap] = useState<DurationCap>(60);
-  const [caption, setCaption] = useState(() => searchParams.get('caption')?.slice(0, 1000) ?? '');
+  const [caption, setCaption] = useState(
+    () => searchParams.get('caption')?.slice(0, maxCaptionLength(null)) ?? '',
+  );
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [blob, setBlob] = useState<Blob | null>(null);
@@ -323,33 +325,6 @@ function RecordPageInner() {
           </button>
         ))}
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        {(planTier
-          ? PLAN_DEFINITIONS[planTier].benefits
-          : [
-              'Delete within 24 hours (free)',
-              'Edit captions from $1',
-              'Delete anytime from $1',
-              'Longer recordings from $1',
-            ]
-        ).map((benefit) => (
-          <div
-            key={benefit}
-            className="rounded-2xl border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs font-medium leading-snug text-[var(--muted)]"
-          >
-            {benefit}
-          </div>
-        ))}
-      </div>
-      {!planTier ? (
-        <p className="mt-2 text-xs text-[var(--muted)]">
-          Free delete window is 24 hours.{' '}
-          <Link href="/settings" className="font-semibold text-accent underline-offset-2 hover:underline">
-            Subscribe from $1
-          </Link>{' '}
-          to edit captions and delete anytime.
-        </p>
-      ) : null}
       <div className="mt-8 flex flex-col items-center gap-4">
         <div className="font-mono text-4xl font-bold tabular-nums">
           {formatMs(elapsed)}
@@ -440,10 +415,10 @@ function RecordPageInner() {
       <textarea
         className="mt-6 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-base"
         rows={3}
-        maxLength={maxCaptionLength(planTier)}
+        maxLength={captionLimit}
         placeholder="Add a caption"
         value={caption}
-        onChange={(e) => setCaption(e.target.value)}
+        onChange={(e) => setCaption(e.target.value.slice(0, captionLimit))}
         disabled={phase === 'posting'}
       />
       {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
@@ -466,7 +441,7 @@ function RecordPageInner() {
             ))}
           </div>
         ) : null}
-        {images.length < MAX_POST_IMAGES ? (
+        {images.length < imageLimit ? (
           <label className={`inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--line)] px-4 text-sm font-semibold ${phase === 'posting' ? 'pointer-events-none opacity-40' : 'cursor-pointer'}`}>
             <ImagePlus size={18} strokeWidth={2.5} />
             Photo
@@ -483,7 +458,7 @@ function RecordPageInner() {
                 if ((e.target.files?.length ?? 0) > 0 && picked.length === 0) {
                   setError('Use a JPEG, PNG, or WebP photo');
                 }
-                setImages((cur) => [...cur, ...picked].slice(0, MAX_POST_IMAGES));
+                setImages((cur) => [...cur, ...picked].slice(0, imageLimit));
                 e.target.value = '';
               }}
             />

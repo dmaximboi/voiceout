@@ -27,5 +27,7 @@ export async function sendMail(
     log.error({ status: res.status, body: await res.text() }, 'resend failed');
     return { sent: false as const };
   }
+  const payload = (await res.json().catch(() => ({}))) as { id?: string };
+  log.info({ to: opts.to, subject: opts.subject, resendId: payload.id }, 'resend ok');
   return { sent: true as const };
 }

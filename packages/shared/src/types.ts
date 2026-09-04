@@ -114,9 +114,23 @@ export type SearchHistoryItem = {
   createdAt: string;
 };
 
+export type NotificationType =
+  | 'follow'
+  | 'comment'
+  | 'reaction'
+  | 'comment_like'
+  | 'follow_post'
+  | 'trending'
+  | 'account_warning'
+  | 'repost'
+  | 'bookmark';
+
+/** Unread engagement icons shown on the Drops control. */
+export type DropSignal = 'like' | 'repost' | 'comment' | 'bookmark';
+
 export type NotificationCard = {
   id: string;
-  type: 'follow' | 'comment' | 'reaction' | 'comment_like' | 'follow_post' | 'trending' | 'account_warning';
+  type: NotificationType;
   message: string | null;
   actor: PublicUser;
   postId: string | null;

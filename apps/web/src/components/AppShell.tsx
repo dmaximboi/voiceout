@@ -5,11 +5,15 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Bell,
+  Bookmark,
   ChevronLeft,
+  Heart,
   Home,
   LogOut,
+  MessageCircle,
   Mic,
   Moon,
+  Repeat2,
   Search,
   Settings,
   Sun,
@@ -21,7 +25,7 @@ import { AccountMenu } from './AccountMenu';
 import { Avatar } from './Avatar';
 import { DockBar } from './DockBar';
 import { Logo } from './Logo';
-import { useNotifications } from '@/lib/notifications';
+import { useNotifications, type DropSignals } from '@/lib/notifications';
 
 export { Avatar } from './Avatar';
 
@@ -154,13 +158,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     active ? 'bg-accent/10 text-accent' : 'tap-hover'
                   }`}
                 >
-                  <span className="relative">
+                  <span className="relative flex items-center gap-1.5">
                     <Icon size={20} strokeWidth={2} />
                     {t.href === '/notifications' && unreadCount > 0 ? (
-                      <span
-                        className="unread-breathe absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-[var(--card)]"
-                        aria-hidden
-                      />
+                      <DropSignalBadges />
                     ) : null}
                   </span>
                   {t.label}
@@ -317,4 +318,33 @@ function ThemeToggle() {
       {dark ? <Sun size={20} strokeWidth={2} /> : <Moon size={20} strokeWidth={2} />}
     </button>
   );
+}
+
+function DropSignalBadges() {
+  const { signals, unreadCount } = useNotifications();
+  const icons = dropSidebarIcons(signals);
+  if (!icons.length) {
+    return (
+      <span className="rounded-full bg-accent/15 px-1.5 text-[10px] font-bold text-accent" aria-hidden>
+        {unreadCount > 9 ? '9+' : unreadCount}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-0.5 text-accent" aria-hidden>
+      {icons.map(({ key, Icon }) => (
+        <Icon key={key} size={14} strokeWidth={2.4} fill={key === 'like' || key === 'bookmark' ? 'currentColor' : 'none'} />
+      ))}
+    </span>
+  );
+}
+
+function dropSidebarIcons(signals: DropSignals) {
+  const order = [
+    { key: 'like' as const, Icon: Heart },
+    { key: 'repost' as const, Icon: Repeat2 },
+    { key: 'comment' as const, Icon: MessageCircle },
+    { key: 'bookmark' as const, Icon: Bookmark },
+  ];
+  return order.filter((item) => signals[item.key]);
 }

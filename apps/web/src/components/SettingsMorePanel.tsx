@@ -1,11 +1,13 @@
 'use client';
 
 import type { MeUser, PublicUser, ReportSubmission } from '@voiceout/shared';
-import { PLAN_DEFINITIONS, type PlanTier } from '@voiceout/shared';
+import { PLAN_DEFINITIONS, formatCooldown, type PlanTier } from '@voiceout/shared';
 import {
   ArrowLeft,
   Bug,
+  CreditCard,
   Flag,
+  KeyRound,
   Smartphone,
   Trash2,
   UserX,
@@ -14,9 +16,10 @@ import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, ApiError, uploadPostImage } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
+import { PasswordField } from '@/components/PasswordField';
 import { canViewModeration } from '@/lib/safetyState';
 
-type Panel = 'menu' | 'bug' | 'report' | 'blocked' | 'phone' | 'delete';
+type Panel = 'menu' | 'password' | 'plan' | 'bug' | 'report' | 'blocked' | 'phone' | 'delete';
 
 const ICON_BTN =
   'flex min-h-[4.5rem] flex-col items-center justify-center gap-1 rounded-2xl border border-[var(--line)] bg-[var(--bg)] px-2 py-3 text-xs font-semibold active:bg-[var(--card)]';
@@ -31,6 +34,21 @@ export function SettingsMorePanel({
   deleteBusy,
   deleteError,
   onDeleteAccount,
+  currentPassword,
+  setCurrentPassword,
+  newPassword,
+  setNewPassword,
+  confirmPassword,
+  setConfirmPassword,
+  passwordError,
+  passwordSaved,
+  passwordLocked,
+  passwordWait,
+  onChangePassword,
+  subNote,
+  subError,
+  subBusy,
+  onOpenPlanSheet,
 }: {
   user: MeUser;
   phoneLink: string | null;
@@ -41,6 +59,21 @@ export function SettingsMorePanel({
   deleteBusy: boolean;
   deleteError: string | null;
   onDeleteAccount: () => void;
+  currentPassword: string;
+  setCurrentPassword: (v: string) => void;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  passwordError: string | null;
+  passwordSaved: boolean;
+  passwordLocked: boolean;
+  passwordWait: number;
+  onChangePassword: (e: FormEvent) => void;
+  subNote: string | null;
+  subError: string | null;
+  subBusy: boolean;
+  onOpenPlanSheet: () => void;
 }) {
   const [panel, setPanel] = useState<Panel>('menu');
 
@@ -50,6 +83,14 @@ export function SettingsMorePanel({
         <>
           <h2 className="text-base font-semibold">More options</h2>
           <div className="mt-3 grid grid-cols-3 gap-2">
+            <button type="button" className={ICON_BTN} onClick={() => setPanel('password')} aria-label="Password">
+              <KeyRound className="h-6 w-6 text-[var(--muted)]" />
+              Password
+            </button>
+            <button type="button" className={ICON_BTN} onClick={() => setPanel('plan')} aria-label="Plan">
+              <CreditCard className="h-6 w-6 text-[var(--muted)]" />
+              {user.planTier ? 'Plan' : 'Subscribe'}
+            </button>
             <button type="button" className={ICON_BTN} onClick={() => setPanel('bug')} aria-label="Report a bug">
               <Bug className="h-6 w-6 text-[var(--muted)]" />
               Bug
@@ -81,7 +122,32 @@ export function SettingsMorePanel({
           ) : null}
         </>
       ) : (
-        <PanelShell title={panelTitle(panel)} onBack={() => setPanel('menu')}>
+        <PanelShell title={panelTitle(panel, user)} onBack={() => setPanel('menu')}>
+          {panel === 'password' ? (
+            <PasswordPanel
+              user={user}
+              currentPassword={currentPassword}
+              setCurrentPassword={setCurrentPassword}
+              newPassword={newPassword}
+              setNewPassword={setNewPassword}
+              confirmPassword={confirmPassword}
+              setConfirmPassword={setConfirmPassword}
+              passwordError={passwordError}
+              passwordSaved={passwordSaved}
+              passwordLocked={passwordLocked}
+              passwordWait={passwordWait}
+              onChangePassword={onChangePassword}
+            />
+          ) : null}
+          {panel === 'plan' ? (
+            <PlanPanel
+              user={user}
+              subNote={subNote}
+              subError={subError}
+              subBusy={subBusy}
+              onOpenPlanSheet={onOpenPlanSheet}
+            />
+          ) : null}
           {panel === 'bug' ? <BugReportPanel /> : null}
           {panel === 'report' ? <ReportAccountPanel /> : null}
           {panel === 'blocked' ? <BlockedAccountsPanel /> : null}
@@ -103,7 +169,9 @@ export function SettingsMorePanel({
   );
 }
 
-function panelTitle(panel: Panel) {
+function panelTitle(panel: Panel, user: MeUser) {
+  if (panel === 'password') return user.hasPassword ? 'Change password' : 'Set a password';
+  if (panel === 'plan') return 'Subscription';
   if (panel === 'bug') return 'Report a bug';
   if (panel === 'report') return 'Report an account';
   if (panel === 'blocked') return 'Blocked accounts';
@@ -131,6 +199,122 @@ function PanelShell({
       </div>
       <div className="mt-4">{children}</div>
     </>
+  );
+}
+
+function PasswordPanel({
+  user,
+  currentPassword,
+  setCurrentPassword,
+  newPassword,
+  setNewPassword,
+  confirmPassword,
+  setConfirmPassword,
+  passwordError,
+  passwordSaved,
+  passwordLocked,
+  passwordWait,
+  onChangePassword,
+}: {
+  user: MeUser;
+  currentPassword: string;
+  setCurrentPassword: (v: string) => void;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  passwordError: string | null;
+  passwordSaved: boolean;
+  passwordLocked: boolean;
+  passwordWait: number;
+  onChangePassword: (e: FormEvent) => void;
+}) {
+  return (
+    <form onSubmit={onChangePassword} className="space-y-3">
+      {passwordLocked ? (
+        <p className="text-sm text-[var(--muted)]">Password can change in {formatCooldown(passwordWait)}.</p>
+      ) : user.hasPassword ? (
+        <p className="text-sm text-[var(--muted)]">Password can change every 3 days after a change.</p>
+      ) : (
+        <p className="text-sm text-[var(--muted)]">Add a password so you can also sign in with email.</p>
+      )}
+      {user.hasPassword ? (
+        <PasswordField
+          placeholder="Current password"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          required
+          disabled={passwordLocked}
+        />
+      ) : (
+        <p className="text-sm text-[var(--muted)]">
+          You signed in with a connected account. You can add a password to also log in with email.
+        </p>
+      )}
+      <PasswordField
+        placeholder="New password (10+ characters)"
+        minLength={10}
+        maxLength={128}
+        autoComplete="new-password"
+        value={newPassword}
+        onChange={(e) => setNewPassword(e.target.value)}
+        required
+        disabled={passwordLocked}
+      />
+      <PasswordField
+        placeholder="Confirm new password"
+        minLength={10}
+        maxLength={128}
+        autoComplete="new-password"
+        value={confirmPassword}
+        onChange={(e) => setConfirmPassword(e.target.value)}
+        required
+        disabled={passwordLocked}
+      />
+      {passwordError ? <p className="text-sm text-red-600">{passwordError}</p> : null}
+      <button
+        className="flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold active:bg-[var(--bg)] disabled:opacity-60"
+        type="submit"
+        disabled={passwordLocked}
+      >
+        {passwordSaved ? 'Updated' : user.hasPassword ? 'Update password' : 'Set password'}
+      </button>
+    </form>
+  );
+}
+
+function PlanPanel({
+  user,
+  subNote,
+  subError,
+  subBusy,
+  onOpenPlanSheet,
+}: {
+  user: MeUser;
+  subNote: string | null;
+  subError: string | null;
+  subBusy: boolean;
+  onOpenPlanSheet: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-[var(--muted)]">
+        {user.planTier
+          ? `${planStatusLabel(user.planTier)} plan active${user.planUntil ? ` until ${new Date(user.planUntil).toLocaleDateString()}` : ''}.`
+          : 'Unlock longer recordings, caption edits, and delete-anytime from $1.'}
+      </p>
+      <button
+        type="button"
+        disabled={subBusy}
+        onClick={onOpenPlanSheet}
+        className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white disabled:opacity-60"
+      >
+        {user.planTier ? 'Change plan' : 'Subscribe'}
+      </button>
+      {subNote ? <p className="text-sm text-[var(--muted)]">{subNote}</p> : null}
+      {subError ? <p className="text-sm text-red-600">{subError}</p> : null}
+    </div>
   );
 }
 

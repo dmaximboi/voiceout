@@ -10,18 +10,24 @@ export const DURATION_CAP_LABELS: Record<DurationCap, string> = {
   1800: '30m',
 };
 
-export const MAX_AUDIO_BYTES: Record<DurationCap, number> = {
+/** Includes short voice-reply caps (6/10/15) used by comment_audio uploads. */
+export const MAX_AUDIO_BYTES = {
+  6: 40_000,
+  10: 60_000,
+  15: 80_000,
   30: 120_000,
   60: 220_000,
   120: 400_000,
   300: 900_000,
   900: 2_400_000,
   1800: 4_800_000,
-};
+} as const satisfies Record<DurationCap, number> & Record<6 | 10 | 15, number>;
 
 export const MAX_AVATAR_BYTES = 2_500_000;
 export const MAX_POST_IMAGE_BYTES = 3_000_000;
-export const MAX_POST_IMAGES = 3;
+/** Absolute ceiling for schema validation; per-plan limits use maxPostImages(). */
+export const MAX_POST_IMAGES = 20;
+/** Free-tier defaults; paid limits via maxCaptionLength / maxCommentLength. */
 export const MAX_CAPTION_LENGTH = 500;
 export const MAX_COMMENT_LENGTH = 500;
 export const MAX_BIO_LENGTH = 160;
@@ -126,7 +132,6 @@ export const RESERVED_HANDLES = [
   'settings',
   'support',
   'trending',
-  'voiceout',
   'www',
 ] as const;
 

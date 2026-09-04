@@ -19,11 +19,26 @@ export const notificationReadSchema = z
 export async function notificationRoutes(app: FastifyInstance) {
   app.get('/notifications/unread-count', async (req, reply) => {
     requireAuth(req, reply);
-    const [row] = await app.db
-      .select({ count: sql<number>`count(*)::int` })
+    const rows = await app.db
+      .select({ type: notifications.type, count: sql<number>`count(*)::int` })
       .from(notifications)
-      .where(and(eq(notifications.userId, req.authUser!.id), isNull(notifications.readAt)));
-    return { count: row?.count ?? 0 };
+      .where(and(eq(notifications.userId, req.authUser!.id), isNull(notifications.readAt)))
+      .groupBy(notifications.type);
+    let count = 0;
+    const signals = {
+      like: false,
+      repost: false,
+      comment: false,
+      bookmark: false,
+    };
+    for (const row of rows) {
+      count += row.count;
+      if (row.type === 'reaction') signals.like = true;
+      else if (row.type === 'repost') signals.repost = true;
+      else if (row.type === 'comment' || row.type === 'comment_like') signals.comment = true;
+      else if (row.type === 'bookmark') signals.bookmark = true;
+    }
+    return { count, signals };
   });
 
   app.get('/notifications', async (req, reply) => {
@@ -109,6 +124,13 @@ export async function notificationRoutes(app: FastifyInstance) {
         .set({ readAt: new Date() })
         .where(and(eq(notifications.userId, req.authUser!.id), isNull(notifications.readAt)));
     }
+    return { ok: true };
+  });
+
+  app.delete('/notifications', async (req, reply) => {
+    requireAuth(req, reply);
+    requireCsrf(req);
+    await app.db.delete(notifications).where(eq(notifications.userId, req.authUser!.id));
     return { ok: true };
   });
 }

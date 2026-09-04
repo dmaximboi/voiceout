@@ -2,8 +2,10 @@
 
 import {
   COMMENT_CATEGORIES,
-  MAX_COMMENT_LENGTH,
   PRESET_STICKERS,
+  canVoiceComment,
+  maxCommentLength,
+  maxVoiceCommentSeconds,
   type CommentCard,
   type CommentCategory,
   type PostCard,
@@ -109,8 +111,15 @@ function PostPageInner() {
       recRef.current?.stop();
       return;
     }
+    if (!canVoiceComment(user?.planTier)) {
+      setReplyError('Subscribe to send voice replies');
+      router.push('/settings');
+      return;
+    }
+    const voiceSeconds = maxVoiceCommentSeconds(user?.planTier);
     micLock.current = true;
     setMicBusy(true);
+    setReplyError(null);
     try {
       recRef.current = await startOpusRecording({
         onStop: (file) => {
@@ -125,7 +134,7 @@ function PostPageInner() {
       setVoiceBlob(null);
       setStickersOpen(false);
       setMicBusy(false);
-      window.setTimeout(() => recRef.current?.stop(), 30_000);
+      window.setTimeout(() => recRef.current?.stop(), voiceSeconds * 1000);
     } catch (err) {
       micLock.current = false;
       setMicBusy(false);
@@ -145,11 +154,19 @@ function PostPageInner() {
     setReplyError(null);
     try {
       let mediaId: string | undefined;
-      if (voiceBlob) mediaId = await uploadAudio('comment_audio', voiceBlob, 30);
+      if (voiceBlob) {
+        if (!canVoiceComment(user.planTier)) {
+          setReplyError('Subscribe to send voice replies');
+          router.push('/settings');
+          return;
+        }
+        const voiceSeconds = maxVoiceCommentSeconds(user.planTier);
+        mediaId = await uploadAudio('comment_audio', voiceBlob, voiceSeconds);
+      }
       await api<{ comment: CommentCard }>(`/posts/${id}/comments`, {
         method: 'POST',
         body: JSON.stringify({
-          body: body.trim(),
+          body: body.trim().slice(0, maxCommentLength(user.planTier)),
           mediaId,
           replyToCommentId: replyToCommentId ?? undefined,
         }),
@@ -183,7 +200,8 @@ function PostPageInner() {
       : comments.filter((comment) => comment.categories.includes(commentCategory));
   const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
   const replyTarget = replyToCommentId ? commentsById.get(replyToCommentId) : undefined;
-  const canVoiceReply = Boolean(user);
+  const canVoiceReply = canVoiceComment(user?.planTier);
+  const commentLimit = maxCommentLength(user?.planTier);
 
   return (
     <div>
@@ -227,9 +245,9 @@ function PostPageInner() {
                 className="min-h-11 min-w-0 flex-1 bg-transparent text-base outline-none disabled:text-[var(--muted)]"
                 placeholder={canVoiceReply ? 'Reply...' : 'Reply (text only)'}
                 value={body}
-                maxLength={MAX_COMMENT_LENGTH}
+                maxLength={commentLimit}
                 disabled={recording || micBusy || Boolean(voiceBlob)}
-                onChange={(e) => setBody(e.target.value.slice(0, MAX_COMMENT_LENGTH))}
+                onChange={(e) => setBody(e.target.value.slice(0, commentLimit))}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -237,23 +255,21 @@ function PostPageInner() {
                   }
                 }}
               />
-              {canVoiceReply ? (
-                <button
-                  type="button"
-                  aria-label={recording ? 'Stop' : 'Voice'}
-                  disabled={micBusy || replyBusy}
-                  onClick={() => void toggleMic()}
-                  className={`grid h-11 w-11 place-items-center rounded-full disabled:opacity-40 ${recording ? 'text-red-500' : 'text-[var(--text)]'} active:bg-[var(--card)]`}
-                >
-                  {micBusy ? (
-                    <Loader2 size={18} className="animate-spin" strokeWidth={2.75} />
-                  ) : recording ? (
-                    <Square size={18} strokeWidth={2.75} />
-                  ) : (
-                    <Mic size={22} strokeWidth={2.75} />
-                  )}
-                </button>
-              ) : null}
+              <button
+                type="button"
+                aria-label={recording ? 'Stop' : 'Voice'}
+                disabled={micBusy || replyBusy}
+                onClick={() => void toggleMic()}
+                className={`grid h-11 w-11 place-items-center rounded-full disabled:opacity-40 ${recording ? 'text-red-500' : 'text-[var(--text)]'} active:bg-[var(--card)]`}
+              >
+                {micBusy ? (
+                  <Loader2 size={18} className="animate-spin" strokeWidth={2.75} />
+                ) : recording ? (
+                  <Square size={18} strokeWidth={2.75} />
+                ) : (
+                  <Mic size={22} strokeWidth={2.75} />
+                )}
+              </button>
             </div>
             {stickersOpen ? (
               <div className="absolute bottom-14 left-0 z-20 grid grid-cols-8 gap-1 rounded-2xl border border-[var(--line)] bg-[var(--card)] p-2 shadow-lg">
@@ -282,7 +298,7 @@ function PostPageInner() {
                     Voice ready · Undo
                   </button>
                 ) : (
-                  `${body.length}/${MAX_COMMENT_LENGTH}`
+                  `${body.length}/${commentLimit}`
                 )}
               </p>
               <button

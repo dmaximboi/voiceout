@@ -8,7 +8,6 @@ config();
 import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
-import type { DurationCap } from '@voiceout/shared';
 import { probeBuffer, withinCap, assertFfprobePath } from './probe.js';
 
 const env = z
@@ -74,7 +73,7 @@ const probeWorker = new Worker(
       return;
     }
     const probed = await probeBuffer(buf, env.FFPROBE_PATH);
-    const cap = (data.media.durationCap ?? 1800) as DurationCap;
+    const cap = data.media.durationCap ?? 1800;
     const ok = withinCap(probed.durationMs, cap);
     await api(`/internal/media/${mediaId}/status`, {
       method: 'POST',

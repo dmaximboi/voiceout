@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { DURATION_PROBE_SLACK_MS, type DurationCap } from '@voiceout/shared';
+import { DURATION_PROBE_SLACK_MS } from '@voiceout/shared';
 
 const exec = promisify(execFile);
 
@@ -39,6 +39,6 @@ export async function probeBuffer(buf: Buffer, ffprobePath: string): Promise<{ d
   }
 }
 
-export function withinCap(durationMs: number, cap: DurationCap) {
+export function withinCap(durationMs: number, cap: number) {
   return durationMs <= cap * 1000 + DURATION_PROBE_SLACK_MS;
 }

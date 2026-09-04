@@ -25,6 +25,7 @@ import { Avatar } from './AppShell';
 import { DisplayName } from './DisplayName';
 import { ReportDialog } from './ReportDialog';
 import { WaveformPlayer } from './WaveformPlayer';
+import { PostImages } from './PostImages';
 import { emitFeedEvent } from '@/lib/feedEvents';
 
 const iconStroke = 2.75;
@@ -548,13 +549,7 @@ export function FeedCard({
               preload="metadata"
             />
           ) : post.imageUrls.length > 0 ? (
-            <div
-              className={`mt-3 overflow-hidden rounded-xl ${post.imageUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}
-            >
-              {post.imageUrls.map((src) => (
-                <img key={src} src={src} alt="" className="max-h-80 w-full object-cover" />
-              ))}
-            </div>
+            <PostImages urls={post.imageUrls} />
           ) : null}
           <div className="mt-3 min-w-0">
             <WaveformPlayer trackId={post.id} src={post.audioUrl} durationMs={post.durationMs} />

@@ -16,6 +16,7 @@ import {
   PRESET_STICKERS,
   RESERVED_HANDLES,
 } from './constants.js';
+import { UNLIMITED_TEXT_LENGTH } from './plan.js';
 
 export const handleSchema = z
   .string()
@@ -107,7 +108,7 @@ export const durationCapSchema = z.custom<number>(
 );
 
 export const createPostSchema = z.object({
-  caption: z.string().trim().min(1).max(1000),
+  caption: z.string().trim().min(1).max(UNLIMITED_TEXT_LENGTH),
   mediaId: z.string().uuid(),
   imageIds: z.array(z.string().uuid()).max(MAX_POST_IMAGES).optional(),
   durationCap: z.number().refine((v) => (DURATION_CAPS as readonly number[]).includes(v)),
@@ -116,12 +117,12 @@ export const createPostSchema = z.object({
 });
 
 export const updatePostCaptionSchema = z.object({
-  caption: z.string().trim().min(1).max(1000),
+  caption: z.string().trim().min(1).max(UNLIMITED_TEXT_LENGTH),
 });
 
 export const createCommentSchema = z
   .object({
-    body: z.string().trim().max(1000).optional().default(''),
+    body: z.string().trim().max(UNLIMITED_TEXT_LENGTH).optional().default(''),
     mediaId: z.string().uuid().optional(),
     stickerId: z
       .enum(PRESET_STICKERS.map((s) => s.id) as [string, ...string[]])

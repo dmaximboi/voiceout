@@ -38,6 +38,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'follow_post',
   'trending',
   'account_warning',
+  'repost',
+  'bookmark',
 ]);
 export const reportTargetEnum = pgEnum('report_target', ['post', 'comment', 'user']);
 export const reportReasonEnum = pgEnum('report_reason', ['spam', 'abuse', 'illegal', 'other']);
@@ -207,7 +209,7 @@ export const posts = pgTable(
     authorId: uuid('author_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    caption: varchar('caption', { length: 1000 }).notNull(),
+    caption: text('caption').notNull(),
     transcript: text('transcript'),
     mediaId: uuid('media_id')
       .notNull()
@@ -244,7 +246,7 @@ export const comments = pgTable(
     authorId: uuid('author_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    body: varchar('body', { length: 500 }).notNull(),
+    body: text('body').notNull(),
     mediaId: uuid('media_id').references(() => mediaObjects.id),
     stickerId: varchar('sticker_id', { length: 32 }),
     category: varchar('category', { length: 32 }).notNull().default('neutral'),

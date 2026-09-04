@@ -11,8 +11,9 @@ import { useNotifications } from '@/lib/notifications';
 
 export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) {
   const { user, loading } = useAuth();
-  const { markRead } = useNotifications();
+  const { markRead, refresh } = useNotifications();
   const [items, setItems] = useState<NotificationCard[] | null>(null);
+  const [clearBusy, setClearBusy] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -38,6 +39,21 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
     };
   }, [user, markRead, onViewed]);
 
+  async function clearAll() {
+    if (!items?.length || clearBusy) return;
+    if (!window.confirm('Clear all drops?')) return;
+    setClearBusy(true);
+    try {
+      await api('/notifications', { method: 'DELETE' });
+      setItems([]);
+      await refresh();
+    } catch {
+      // keep list; user can retry
+    } finally {
+      setClearBusy(false);
+    }
+  }
+
   if (loading || items === null) {
     return <p className="px-4 py-6 text-sm text-[var(--muted)]">Checking drops.</p>;
   }
@@ -60,6 +76,16 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
   return (
     <div>
       <SendBar />
+      <div className="flex justify-end px-4 pt-2">
+        <button
+          type="button"
+          disabled={clearBusy}
+          onClick={() => void clearAll()}
+          className="min-h-10 rounded-full px-3 text-sm font-semibold text-[var(--muted)] active:bg-[var(--bg)] disabled:opacity-50"
+        >
+          {clearBusy ? 'Clearing…' : 'Clear all'}
+        </button>
+      </div>
       <ul>
         {items.map((n) => (
           <li key={n.id} className="flex gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -85,8 +111,11 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
 function label(type: NotificationCard['type']) {
   if (type === 'follow') return 'followed you';
   if (type === 'comment') return 'commented on your voice';
-  if (type === 'reaction') return 'reacted to your voice';
+  if (type === 'reaction') return 'liked your voice';
+  if (type === 'repost') return 'reshared your voice';
+  if (type === 'bookmark') return 'bookmarked your voice';
   if (type === 'follow_post') return 'dropped a new voice';
   if (type === 'trending') return 'is trending';
+  if (type === 'account_warning') return 'sent an account notice';
   return 'liked your comment';
 }
