@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 config();
 
-import { Queue, Worker } from 'bullmq';
+import { Worker, type WorkerOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
 import { probeBuffer, withinCap, assertFfprobePath } from './probe.js';
@@ -23,16 +23,35 @@ const env = z
       .optional()
       .transform((v) => v === 'true' || v === '1'),
     BACKEND_PORT: z.coerce.number().default(4001),
+    /** Idle queue poll interval (ms). Default 15s — BullMQ default is 5ms and burns Upstash. */
+    REDIS_DRAIN_DELAY_MS: z.coerce.number().default(15_000),
+    /** How often to recompute trending without BullMQ repeatables. Default 2h. */
+    TRENDING_EVERY_MS: z.coerce.number().default(2 * 60 * 60 * 1000),
   })
   .parse({
     ...process.env,
-    // Render/Fly inject PORT; prefer it over BACKEND_PORT so health checks hit the right port.
     BACKEND_PORT: process.env.PORT || process.env.BACKEND_PORT || '4001',
   });
 
 assertFfprobePath(env.FFPROBE_PATH);
 
-const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+function bullConnection() {
+  // Each Worker needs its own connection (blocking). Keep ready-check off.
+  return new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+    connectTimeout: 5_000,
+    keepAlive: 30_000,
+  });
+}
+
+const lightWorkerOpts: Partial<WorkerOptions> = {
+  concurrency: 1,
+  drainDelay: env.REDIS_DRAIN_DELAY_MS,
+  stalledInterval: 5 * 60_000,
+  skipStalledCheck: true,
+  lockDuration: 120_000,
+};
 
 async function api(path: string, init?: RequestInit) {
   const incoming = new Headers(init?.headers);
@@ -93,7 +112,7 @@ const probeWorker = new Worker(
       });
     }
   },
-  { connection: redis, concurrency: 2 },
+  { connection: bullConnection(), ...lightWorkerOpts },
 );
 
 const transcribeWorker = new Worker(
@@ -129,22 +148,22 @@ const transcribeWorker = new Worker(
       });
     }
   },
-  { connection: redis, concurrency: 2 },
+  { connection: bullConnection(), ...lightWorkerOpts },
 );
 
-const trendingWorker = new Worker(
-  'trending',
-  async () => {
+// Trending: plain timer — no BullMQ Worker/Queue/repeatable (those were Redis-heavy).
+async function recomputeTrending() {
+  try {
     await fetch(`${env.ALGO_URL}/v1/trending/recompute`, {
       method: 'POST',
       headers: { authorization: `Bearer ${env.ALGO_SERVICE_TOKEN}` },
     });
-  },
-  { connection: redis },
-);
-
-const trendingQ = new Queue('trending', { connection: redis });
-await trendingQ.add('recompute', {}, { repeat: { every: 30 * 60 * 1000 }, jobId: 'trending-repeat' });
+  } catch (err) {
+    console.error('trending recompute failed', err);
+  }
+}
+void recomputeTrending();
+setInterval(() => void recomputeTrending(), env.TRENDING_EVERY_MS);
 
 const http = await import('node:http');
 http
@@ -156,5 +175,6 @@ http
 
 probeWorker.on('failed', (job, err) => console.error('probe failed', job?.id, err));
 transcribeWorker.on('failed', (job, err) => console.error('transcribe failed', job?.id, err));
-trendingWorker.on('failed', (job, err) => console.error('trending failed', job?.id, err));
-console.log(`backend workers on :${env.BACKEND_PORT}`);
+console.log(
+  `backend workers on :${env.BACKEND_PORT} (drainDelay=${env.REDIS_DRAIN_DELAY_MS}ms trendingEvery=${env.TRENDING_EVERY_MS}ms)`,
+);

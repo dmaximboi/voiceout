@@ -23,6 +23,8 @@ const redis = new Redis(env.REDIS_URL, {
   connectTimeout: 3000,
   commandTimeout: 2500,
   enableOfflineQueue: false,
+  enableReadyCheck: false,
+  keepAlive: 30_000,
 });
 const s3 = createS3(env);
 const queues = createQueues(env.REDIS_URL);

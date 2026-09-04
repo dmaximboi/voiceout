@@ -399,7 +399,7 @@ export async function postRoutes(app: FastifyInstance) {
     });
     if (!comment) return reply.code(500).send({ error: 'Failed' });
     if (body.mediaId && !app.env.SKIP_MEDIA_PROBE) {
-      await app.queues.mediaProbe.add('probe', { mediaId: body.mediaId, commentId: comment.id });
+      await enqueue(app.queues.mediaProbe, 'probe', { mediaId: body.mediaId, commentId: comment.id });
     }
     await notify(app.db, {
       userId: replyToUserId ?? post.authorId,
