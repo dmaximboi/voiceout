@@ -1,4 +1,4 @@
-import { NAME_CHANGE_MS, PASSWORD_CHANGE_MS } from './constants.js';
+import { HANDLE_CHANGE_MS, PASSWORD_CHANGE_MS } from './constants.js';
 
 export function availableAt(anchor: Date | string, windowMs: number) {
   return new Date(new Date(anchor).getTime() + windowMs);
@@ -25,8 +25,18 @@ export function formatCooldown(ms: number) {
   return n === 1 ? '1 minute' : `${n} minutes`;
 }
 
+/** Handle change cooldown (display name is free anytime). */
+export function handleChangeAvailableAt(createdAt: Date | string, lastChangedAt: Date | string | null) {
+  return availableAt(lastChangedAt ?? createdAt, HANDLE_CHANGE_MS);
+}
+
+/** @deprecated alias for handleChangeAvailableAt */
 export function nameChangeAvailableAt(createdAt: Date | string, lastChangedAt: Date | string | null) {
-  return availableAt(lastChangedAt ?? createdAt, NAME_CHANGE_MS);
+  return handleChangeAvailableAt(createdAt, lastChangedAt);
+}
+
+export function avatarChangeAvailableAt(createdAt: Date | string, lastChangedAt: Date | string | null) {
+  return availableAt(lastChangedAt ?? createdAt, HANDLE_CHANGE_MS);
 }
 
 export function passwordChangeAvailableAt(createdAt: Date | string, lastChangedAt: Date | string | null) {

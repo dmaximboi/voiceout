@@ -319,7 +319,7 @@ export function FeedCard({
 
   async function share() {
     if (demo) return;
-    const url = postShareUrl(post.id, { via: user?.id });
+    const url = postShareUrl(post.shareCode || post.id, { via: user?.id });
     try {
       if (navigator.share) {
         await navigator.share({
@@ -531,7 +531,7 @@ export function FeedCard({
             </p>
           ) : (
             <Link
-              href={postPath(post.id)}
+              href={postPath(post.shareCode || post.id)}
               className="mt-1 block break-words whitespace-pre-wrap text-[15px] leading-6 active:opacity-80"
             >
               {post.caption}
@@ -570,7 +570,7 @@ export function FeedCard({
                 {post.commentCount}
               </span>
             ) : (
-              <Link href={postPath(post.id)} className={btn}>
+              <Link href={postPath(post.shareCode || post.id)} className={btn}>
                 <MessageCircle size={20} strokeWidth={iconStroke} />
                 {post.commentCount}
               </Link>

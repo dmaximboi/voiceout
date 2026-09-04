@@ -129,6 +129,20 @@ export const RANK_FACTOR_WEIGHTS = {
   'reach fairness': 0.025,
   'premium badge': 0.005,
   'negative feedback': -0.11,
+  /** Wilson lower bound on engagement quality (comments + completion). */
+  'wilson engagement': 0.04,
+  /** Harmonic mean of language / emotion / region affinities. */
+  'affinity harmonic': 0.035,
+  /** Bayesian cold-start prior for sparse authors. */
+  'cold start prior': 0.02,
+  /** Zipf dampening when unique reach grows large. */
+  'zipf reach': 0.02,
+  /** KL-style novelty vs recent captions (1 - similarity). */
+  'information gain': 0.03,
+  /** Log-odds of complete listens vs seen fatigue. */
+  'completion odds': 0.03,
+  /** Exponential decay freshness complementary to recency. */
+  'half life freshness': 0.025,
 } as const;
 
 type RankFactorName = keyof typeof RANK_FACTOR_WEIGHTS;
@@ -228,27 +242,61 @@ function emotionAffinity(viewerEmotion: string | undefined, postEmotion: string 
   return viewer === postEmotion ? 1 : 0.08;
 }
 
+function wilsonLowerBound(successes: number, trials: number, z = 1.96) {
+  if (trials <= 0) return 0.35;
+  const p = Math.min(1, Math.max(0, successes / trials));
+  const z2 = z * z;
+  const denom = 1 + z2 / trials;
+  const centre = p + z2 / (2 * trials);
+  const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * trials)) / trials);
+  return clamp((centre - margin) / denom);
+}
+
+function harmonicMean(values: number[]) {
+  const usable = values.filter((v) => v > 0);
+  if (!usable.length) return 0.35;
+  return clamp(usable.length / usable.reduce((sum, v) => sum + 1 / v, 0));
+}
+
+function halfLifeFreshness(createdAt: string, halfLifeHours = 14) {
+  try {
+    const ts = new Date(createdAt).getTime();
+    const hours = Math.max(0, (Date.now() - ts) / 3_600_000);
+    return clamp(Math.pow(0.5, hours / halfLifeHours));
+  } catch {
+    return 0.3;
+  }
+}
+
 function localFactorValues(c: RankCandidate, payload: RankPayload, proximity: Map<string, number>) {
   const time = ageAndTimeOfDay(c.created_at);
   const uniqueReach = Math.max(0, c.unique_reach ?? 0);
+  const lang = softAffinity(c.lang, payload.viewer_lang);
+  const emotion = emotionAffinity(payload.viewer_emotion, c.emotion);
+  const region = softAffinity(c.region, payload.viewer_region);
+  const textSim = cosineSimilarity(`${c.caption} ${c.transcript}`, payload.recent_captions);
+  const completion = clamp(c.complete_listen ?? 0);
+  const seen = Math.max(0, c.seen_count ?? 0);
+  const engagementTrials = Math.max(1, seen + Math.round(10 * completion) + Math.round(c.comment_boost));
+  const engagementWins = Math.round(8 * completion) + Math.round(2 * c.comment_boost) + Math.min(3, c.replay_count ?? 0);
   return {
     recency: time.recency,
     source: SOURCE_WEIGHT[c.source] ?? 0.2,
     'graph proximity': Math.max(clamp(c.graph_proximity ?? 0), proximity.get(c.author_id) ?? 0),
     'duration fit': durationScore(c.duration_ms, payload.avg_listen_ms),
-    'text similarity': cosineSimilarity(`${c.caption} ${c.transcript}`, payload.recent_captions),
+    'text similarity': textSim,
     'search similarity': clamp(c.search_similarity ?? 0),
     'comment engagement': clamp(0.15 * c.comment_boost),
     replay: clamp(Math.min(Math.max(c.replay_count ?? 0, 0), 3) / 3),
-    'language match': softAffinity(c.lang, payload.viewer_lang),
-    'emotion match': emotionAffinity(payload.viewer_emotion, c.emotion),
-    'region match': softAffinity(c.region, payload.viewer_region),
+    'language match': lang,
+    'emotion match': emotion,
+    'region match': region,
     'share affinity': clamp((c.share_affinity ?? 0) + 0.04 * (c.prior_share_boost ?? 0)),
-    completion: clamp(c.complete_listen ?? 0),
+    completion,
     'bookmark affinity': clamp(c.bookmark_affinity ?? 0),
     'reply affinity': clamp(c.reply_affinity ?? 0),
     'author familiarity': clamp(c.author_familiarity ?? 0),
-    'seen fatigue': clamp(Math.log1p(Math.max(0, c.seen_count ?? 0)) / Math.log(6)),
+    'seen fatigue': clamp(Math.log1p(seen) / Math.log(6)),
     'reaction affinity': clamp(c.reaction_affinity ?? 0),
     'comment affinity': clamp(c.comment_affinity ?? 0),
     'repost affinity': clamp(c.repost_affinity ?? 0),
@@ -262,6 +310,15 @@ function localFactorValues(c: RankCandidate, payload: RankPayload, proximity: Ma
       : uniqueReach < 8 ? 1 : 1 / (1 + uniqueReach / 500),
     'premium badge': c.premium_badge ? 1 : 0,
     'negative feedback': clamp(c.negative_feedback ?? 0),
+    'wilson engagement': wilsonLowerBound(engagementWins, engagementTrials),
+    'affinity harmonic': harmonicMean([lang, emotion, region]),
+    'cold start prior': clamp(1 / (1 + 4 * (c.author_familiarity ?? 0))),
+    'zipf reach': clamp(1 / Math.log2(2 + uniqueReach)),
+    'information gain': clamp(1 - textSim),
+    'completion odds': clamp(
+      Math.exp(completion) / (Math.exp(completion) + Math.exp(Math.min(1, seen / 8))),
+    ),
+    'half life freshness': halfLifeFreshness(c.created_at),
   } satisfies Record<RankFactorName, number>;
 }
 

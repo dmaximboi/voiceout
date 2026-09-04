@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
-/** Post images: natural size while loading, click to expand, no inward crop. */
+/** Feed thumbs use default cover crop; tap opens full image. */
 export function PostImages({ urls }: { urls: string[] }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -12,9 +12,7 @@ export function PostImages({ urls }: { urls: string[] }) {
 
   return (
     <>
-      <div
-        className={`mt-3 ${urls.length > 1 ? 'grid grid-cols-2 gap-1.5' : ''}`}
-      >
+      <div className={`mt-3 overflow-hidden rounded-xl ${urls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
         {urls.map((src) => (
           <PostImageThumb key={src} src={src} multi={urls.length > 1} onOpen={() => setOpen(src)} />
         ))}
@@ -41,25 +39,20 @@ function PostImageThumb({
       type="button"
       onClick={onOpen}
       aria-label="View full image"
-      className={`relative block w-full overflow-hidden rounded-xl bg-[var(--line)]/60 text-left active:opacity-95 ${
-        multi ? 'min-h-36' : 'min-h-48'
+      className={`relative block w-full overflow-hidden bg-[var(--line)]/50 text-left active:opacity-95 ${
+        multi ? 'aspect-square' : 'max-h-80'
       }`}
     >
-      {!loaded && !failed ? (
-        <span
-          className={`absolute inset-0 animate-pulse bg-[var(--line)] ${multi ? 'min-h-36' : 'min-h-48'}`}
-          aria-hidden
-        />
-      ) : null}
+      {!loaded && !failed ? <span className="absolute inset-0 animate-pulse bg-[var(--line)]" aria-hidden /> : null}
       {failed ? (
-        <span className="grid min-h-36 place-items-center px-3 text-sm text-[var(--muted)]">Image unavailable</span>
+        <span className="grid min-h-40 place-items-center px-3 text-sm text-[var(--muted)]">Image unavailable</span>
       ) : (
         <img
           src={src}
           alt=""
           onLoad={() => setLoaded(true)}
           onError={() => setFailed(true)}
-          className={`relative z-[1] mx-auto max-h-[28rem] w-full object-contain transition-opacity duration-200 ${
+          className={`relative z-[1] max-h-80 w-full object-cover transition-opacity duration-200 ${
             loaded ? 'opacity-100' : 'opacity-0'
           }`}
         />

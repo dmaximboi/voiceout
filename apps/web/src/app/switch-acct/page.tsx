@@ -73,6 +73,15 @@ export default function SwitchAcctPage() {
         />
       </div>
 
+      {user.role === 'admin' || user.role === 'moderator' ? (
+        <p className="mt-6 text-sm">
+          Open the full console at{' '}
+          <a href="/admin" className="font-semibold text-accent underline">
+            /admin
+          </a>
+          .
+        </p>
+      ) : null}
       {user.role === 'admin' ? <StudioGrant unlocked={step.unlocked} onNeedUnlock={() => void step.refresh()} /> : null}
       <ModeratorPanel
         role={user.role as 'moderator' | 'admin'}

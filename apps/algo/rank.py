@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import math
 import numpy as np
 from pydantic import BaseModel
 
@@ -20,8 +21,15 @@ FACTOR_WEIGHTS: dict[str, float] = {
     "author familiarity": 0.040, "seen fatigue": -0.060, "reaction affinity": 0.035,
     "comment affinity": 0.035, "repost affinity": 0.030, "voice affinity": 0.030,
     "time of day": 0.020, "category affinity": 0.040, "novelty": 0.025,
-    "explore bonus": 0.020, "reach fairness": 0.025, "premium badge": 0.005,
+    "explore bonus": 0.020, "reach fairness": 0.025,     "premium badge": 0.005,
     "negative feedback": -0.110,
+    "wilson engagement": 0.040,
+    "affinity harmonic": 0.035,
+    "cold start prior": 0.020,
+    "zipf reach": 0.020,
+    "information gain": 0.030,
+    "completion odds": 0.030,
+    "half life freshness": 0.025,
 }
 FACTOR_NAMES = tuple(FACTOR_WEIGHTS)
 FEATURE_WEIGHTS = np.array(list(FACTOR_WEIGHTS.values()), dtype=float)
@@ -143,6 +151,31 @@ def feature_matrix(
         0.15 if c.over_reach_cap else (1.0 if c.unique_reach < 8 else 1.0 / (1.0 + c.unique_reach / 500.0))
         for c in candidates
     ])
+    seen = np.array([max(0, c.seen_count) for c in candidates], dtype=float)
+    trials = np.maximum(1.0, seen + np.round(10 * complete) + np.round(boost / 0.15))
+    wins = np.round(8 * complete) + np.round(2 * (boost / 0.15)) + np.minimum(3, np.array([c.replay_count for c in candidates], dtype=float))
+    p = np.clip(wins / trials, 0.0, 1.0)
+    z2 = 1.96 ** 2
+    denom = 1.0 + z2 / trials
+    centre = p + z2 / (2.0 * trials)
+    margin = 1.96 * np.sqrt((p * (1.0 - p) + z2 / (4.0 * trials)) / trials)
+    wilson = np.clip((centre - margin) / denom, 0.0, 1.0)
+    aff = np.stack([lang, emotion, region], axis=1)
+    harm = np.clip(3.0 / np.sum(1.0 / np.maximum(aff, 1e-3), axis=1), 0.0, 1.0)
+    cold = np.clip(1.0 / (1.0 + 4.0 * np.array([c.author_familiarity for c in candidates], dtype=float)), 0.0, 1.0)
+    zipf = np.clip(1.0 / np.log2(2.0 + np.array([c.unique_reach for c in candidates], dtype=float)), 0.0, 1.0)
+    info = np.clip(1.0 - text, 0.0, 1.0)
+    odds = np.clip(np.exp(complete) / (np.exp(complete) + np.exp(np.minimum(1.0, seen / 8.0))), 0.0, 1.0)
+    half_list: list[float] = []
+    now = datetime.now(timezone.utc)
+    for c in candidates:
+        try:
+            ts = datetime.fromisoformat(c.created_at.replace("Z", "+00:00"))
+            hours = max(0.0, (now - ts).total_seconds() / 3600.0)
+            half_list.append(float(math.pow(0.5, hours / 14.0)))
+        except ValueError:
+            half_list.append(0.3)
+    half = np.clip(np.array(half_list, dtype=float), 0.0, 1.0)
     matrix = np.column_stack([
         recency, source, graph, duration, text,
         np.clip([c.search_similarity for c in candidates], 0, 1), boost, replay, lang, emotion,
@@ -159,6 +192,7 @@ def feature_matrix(
         [1.0 if c.explore else 0.0 for c in candidates], reach_fairness,
         [1.0 if c.premium_badge else 0.0 for c in candidates],
         np.clip([c.negative_feedback for c in candidates], 0, 1),
+        wilson, harm, cold, zipf, info, odds, half,
     ])
     return np.asarray(matrix, dtype=float)
 

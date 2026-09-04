@@ -34,6 +34,7 @@ const clip = '/samples/clip.mp4';
 export const SAMPLE_POSTS: PostCard[] = [
   {
     id: 'sample-1',
+    shareCode: 'VoSample01',
     author: user('sample-u1', 'amayawaves', 'Amaya Waves'),
     caption: 'Morning walk thoughts. The city sounds different when you actually listen.',
     durationMs: 8000,
@@ -57,6 +58,7 @@ export const SAMPLE_POSTS: PostCard[] = [
   },
   {
     id: 'sample-2',
+    shareCode: 'JoVoxClip2',
     author: user('sample-u2', 'jordanvox', 'Jordan Vox'),
     caption: 'Voice notes beat long texts. You hear the pause, the laugh, the real thing.',
     durationMs: 8000,
@@ -80,6 +82,7 @@ export const SAMPLE_POSTS: PostCard[] = [
   },
   {
     id: 'sample-3',
+    shareCode: 'NileMkt03',
     author: user('sample-u3', 'nilespeak', 'Nile Speak'),
     caption: 'Tiny story from the market today. You had to be there. This is as close as I can get you.',
     durationMs: 8000,

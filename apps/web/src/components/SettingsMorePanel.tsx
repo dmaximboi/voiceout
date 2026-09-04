@@ -26,9 +26,6 @@ const ICON_BTN =
 
 export function SettingsMorePanel({
   user,
-  phoneLink,
-  phoneBusy,
-  onMakePhoneLink,
   deleteConfirm,
   setDeleteConfirm,
   deleteBusy,
@@ -51,9 +48,6 @@ export function SettingsMorePanel({
   onOpenPlanSheet,
 }: {
   user: MeUser;
-  phoneLink: string | null;
-  phoneBusy: boolean;
-  onMakePhoneLink: () => void;
   deleteConfirm: string;
   setDeleteConfirm: (v: string) => void;
   deleteBusy: boolean;
@@ -152,7 +146,7 @@ export function SettingsMorePanel({
           {panel === 'report' ? <ReportAccountPanel /> : null}
           {panel === 'blocked' ? <BlockedAccountsPanel /> : null}
           {panel === 'phone' ? (
-            <PhoneLinkPanel phoneLink={phoneLink} phoneBusy={phoneBusy} onMakePhoneLink={onMakePhoneLink} />
+            <PhoneLinkPanel />
           ) : null}
           {panel === 'delete' ? (
             <DeleteAccountPanel
@@ -575,33 +569,114 @@ function BlockedAccountsPanel() {
   );
 }
 
-function PhoneLinkPanel({
-  phoneLink,
-  phoneBusy,
-  onMakePhoneLink,
-}: {
-  phoneLink: string | null;
-  phoneBusy: boolean;
-  onMakePhoneLink: () => void;
-}) {
+function PhoneLinkPanel() {
+  type LinkRow = {
+    id: string;
+    label: string | null;
+    createdAt: string;
+    expiresAt: string;
+    claimedAt: string | null;
+    revokedAt: string | null;
+    active: boolean;
+  };
+  const [links, setLinks] = useState<LinkRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [latestUrl, setLatestUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api<{ links: LinkRow[] }>('/auth/device-links');
+      setLinks(data.links);
+    } catch {
+      setLinks([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function createLink() {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await api<{ k: string }>('/auth/device-link', { method: 'POST', body: '{}' });
+      setLatestUrl(`${window.location.origin}/device-login?k=${encodeURIComponent(data.k)}&next=/`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not create link');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/auth/device-links/${id}`, { method: 'DELETE', body: '{}' });
+      setLatestUrl(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : 'Could not revoke');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
-      <p className="text-sm text-[var(--muted)]">One-time link to sign in on another device. Expires in 5 minutes.</p>
+      <p className="text-sm text-[var(--muted)]">
+        Sign in on another device without sharing your password. Revoke a link anytime to kill that session.
+      </p>
       <button
         type="button"
-        className="mt-3 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold"
-        onClick={onMakePhoneLink}
-        disabled={phoneBusy}
+        className="mt-3 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold disabled:opacity-50"
+        onClick={() => void createLink()}
+        disabled={busy}
       >
-        {phoneBusy ? 'Making link…' : 'Create phone link'}
+        {busy ? 'Working…' : 'Create phone link'}
       </button>
-      {phoneLink ? (
+      {latestUrl ? (
         <p className="mt-3 break-all rounded-xl bg-[var(--bg)] px-3 py-2 text-sm">
-          <a className="text-accent underline" href={phoneLink}>
-            {phoneLink}
+          <a className="text-accent underline" href={latestUrl}>
+            {latestUrl}
           </a>
         </p>
       ) : null}
+      {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+      <ul className="mt-4 space-y-2">
+        {links.map((link) => (
+          <li
+            key={link.id}
+            className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] px-3 py-2"
+          >
+            <div className="min-w-0 text-xs text-[var(--muted)]">
+              <p className="truncate font-semibold text-[var(--text)]">{link.label || 'Phone link'}</p>
+              <p>
+                {link.revokedAt
+                  ? 'Revoked'
+                  : link.claimedAt
+                    ? 'Used'
+                    : link.active
+                      ? 'Ready'
+                      : 'Expired'}
+              </p>
+            </div>
+            {!link.revokedAt ? (
+              <button
+                type="button"
+                className="min-h-10 shrink-0 rounded-full px-3 text-sm font-semibold text-red-600"
+                disabled={busy}
+                onClick={() => void revoke(link.id)}
+              >
+                Delete
+              </button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

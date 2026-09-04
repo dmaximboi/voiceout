@@ -34,6 +34,7 @@ import { withIdempotency } from '../lib/idempotency.js';
 import { notify, notifyFollowersOfPost } from '../lib/notify.js';
 import { enqueue } from '../lib/queue.js';
 import { deleteObject } from '../lib/s3.js';
+import { generateShareCode, looksLikeShareCode, looksLikeUuid } from '../lib/shareCode.js';
 import { assertDailyQuota } from '../lib/quota.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { publicMediaUrl } from '../lib/s3.js';
@@ -84,21 +85,31 @@ export async function postRoutes(app: FastifyInstance) {
       body.durationCap * 1000 + 2000,
     );
     await app.db.update(mediaObjects).set({ durationMs }).where(eq(mediaObjects.id, media.id));
-    const [post] = await app.db
-      .insert(posts)
-      .values({
-        authorId: req.authUser!.id,
-        caption,
-        transcript: body.transcript ? sanitizeText(body.transcript).slice(0, 4000) : null,
-        mediaId: media.id,
-        imageIds,
-        durationMs,
-        durationCap: body.durationCap,
-        status,
-        lang: geo.lang || null,
-        region: geo.region || null,
-      })
-      .returning();
+    let post: typeof posts.$inferSelect | undefined;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const [row] = await app.db
+          .insert(posts)
+          .values({
+            authorId: req.authUser!.id,
+            caption,
+            transcript: body.transcript ? sanitizeText(body.transcript).slice(0, 4000) : null,
+            mediaId: media.id,
+            imageIds,
+            durationMs,
+            durationCap: body.durationCap,
+            status,
+            lang: geo.lang || null,
+            region: geo.region || null,
+            shareCode: generateShareCode(10),
+          })
+          .returning();
+        post = row;
+        break;
+      } catch (err) {
+        if (attempt === 5) throw err;
+      }
+    }
     if (!post) return reply.code(500).send({ error: 'Failed' });
     if (status === 'published') {
       await notifyFollowersOfPost(app.db, req.authUser!.id, post.id);
@@ -120,8 +131,12 @@ export async function postRoutes(app: FastifyInstance) {
   });
 
   app.get('/posts/:id', async (req, reply) => {
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
+    const { id } = z.object({ id: z.string().min(8).max(64) }).parse(req.params);
+    const [post] = looksLikeUuid(id)
+      ? await app.db.select().from(posts).where(eq(posts.id, id)).limit(1)
+      : looksLikeShareCode(id)
+        ? await app.db.select().from(posts).where(eq(posts.shareCode, id)).limit(1)
+        : [];
     if (!post || (post.status !== 'published' && post.authorId !== req.authUser?.id)) {
       return reply.code(404).send({ error: 'Not found' });
     }

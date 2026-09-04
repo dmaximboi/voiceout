@@ -1,13 +1,11 @@
 'use client';
 
 import {
-  COMMENT_CATEGORIES,
   PRESET_STICKERS,
   canVoiceComment,
   maxCommentLength,
   maxVoiceCommentSeconds,
   type CommentCard,
-  type CommentCategory,
   type PostCard,
 } from '@voiceout/shared';
 import { Heart, Loader2, Mic, Reply, Smile, Square, X } from 'lucide-react';
@@ -47,7 +45,6 @@ function PostPageInner() {
   const [missing, setMissing] = useState(false);
   const [fatal, setFatal] = useState<Error | null>(null);
   const [replyError, setReplyError] = useState<string | null>(null);
-  const [commentCategory, setCommentCategory] = useState<'all' | CommentCategory>('all');
   const [replyToCommentId, setReplyToCommentId] = useState<string | null>(null);
   const [reportComment, setReportComment] = useState<CommentCard | null>(null);
   const recRef = useRef<OpusHandle | null>(null);
@@ -174,7 +171,6 @@ function PostPageInner() {
       setBody('');
       setVoiceBlob(null);
       setReplyToCommentId(null);
-      setCommentCategory('all');
       await load();
     } catch (err) {
       console.error(err);
@@ -190,14 +186,6 @@ function PostPageInner() {
     return <p className="p-6 text-sm text-[var(--muted)]">This voice is gone or private.</p>;
   if (!post) return <p className="p-6 text-sm text-[var(--muted)]">Loading.</p>;
 
-  const categoryCounts = countCommentCategories(comments);
-  const shownCategories = COMMENT_CATEGORIES.filter(
-    (category) => (categoryCounts.get(category) ?? 0) > 0,
-  );
-  const visibleComments =
-    commentCategory === 'all'
-      ? comments
-      : comments.filter((comment) => comment.categories.includes(commentCategory));
   const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
   const replyTarget = replyToCommentId ? commentsById.get(replyToCommentId) : undefined;
   const canVoiceReply = canVoiceComment(user?.planTier);
@@ -321,51 +309,11 @@ function PostPageInner() {
           </p>
         )}
       </div>
-      <div
-        role="tablist"
-        aria-label="Comment categories"
-        className="flex gap-1 overflow-x-auto border-b border-[var(--line)] px-3 py-2"
-      >
-        <button
-          id="comment-tab-all"
-          type="button"
-          role="tab"
-          aria-selected={commentCategory === 'all'}
-          aria-controls="comment-category-panel"
-          className={`min-h-10 shrink-0 rounded-full px-4 text-sm font-semibold ${
-            commentCategory === 'all'
-              ? 'bg-accent text-white'
-              : 'bg-[var(--bg)] text-[var(--muted)]'
-          }`}
-          onClick={() => setCommentCategory('all')}
-        >
-          All {comments.length}
-        </button>
-        {shownCategories.map((category) => (
-          <button
-            key={category}
-            id={`comment-tab-${category}`}
-            type="button"
-            role="tab"
-            aria-selected={commentCategory === category}
-            aria-controls="comment-category-panel"
-            className={`min-h-10 shrink-0 rounded-full px-4 text-sm font-semibold ${
-              commentCategory === category
-                ? 'bg-accent text-white'
-                : 'bg-[var(--bg)] text-[var(--muted)]'
-            }`}
-            onClick={() => setCommentCategory(category)}
-          >
-            {commentCategoryLabel(category)} {categoryCounts.get(category)}
-          </button>
-        ))}
+      <div className="border-b border-[var(--line)] px-4 py-2 text-sm font-semibold text-[var(--muted)]">
+        Replies {comments.length}
       </div>
-      <ul
-        id="comment-category-panel"
-        role="tabpanel"
-        aria-labelledby={`comment-tab-${commentCategory}`}
-      >
-        {visibleComments.map((c) => {
+      <ul>
+        {comments.map((c) => {
           const parent = c.replyToCommentId ? commentsById.get(c.replyToCommentId) : undefined;
           return (
             <li key={c.id} className="flex gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -463,21 +411,4 @@ function PostPageInner() {
       ) : null}
     </div>
   );
-}
-
-function countCommentCategories(comments: CommentCard[]) {
-  const counts = new Map<CommentCategory, number>();
-  for (const comment of comments) {
-    for (const category of new Set(comment.categories)) {
-      counts.set(category, (counts.get(category) ?? 0) + 1);
-    }
-  }
-  return counts;
-}
-
-function commentCategoryLabel(category: CommentCategory) {
-  return category
-    .split('_')
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(' ');
 }

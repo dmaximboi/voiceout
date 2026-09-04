@@ -2,6 +2,9 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Env } from '../env.js';
 import { timingSafeEqualStr } from './crypto.js';
 
+/** Sliding idle window for refresh cookie + DB session expiry. */
+export const SESSION_IDLE_COOKIE_SEC = 7 * 24 * 60 * 60;
+
 const ACCESS = 'vo_access';
 const REFRESH = 'vo_refresh';
 const CSRF = 'vo_csrf';
@@ -23,7 +26,7 @@ export function setCsrfCookie(reply: FastifyReply, env: Env, csrf: string, opts?
   reply.setCookie(CSRF, csrf, {
     ...base,
     httpOnly: false,
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: SESSION_IDLE_COOKIE_SEC,
   });
 }
 
@@ -37,7 +40,7 @@ export function setAuthCookies(
 ) {
   const base = cookieBase(env, opts?.secure);
   reply.setCookie(ACCESS, access, { ...base, maxAge: 60 * 60 });
-  reply.setCookie(REFRESH, refresh, { ...base, maxAge: 60 * 60 * 24 * 7 });
+  reply.setCookie(REFRESH, refresh, { ...base, maxAge: SESSION_IDLE_COOKIE_SEC });
   setCsrfCookie(reply, env, csrf, opts);
 }
 

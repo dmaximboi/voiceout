@@ -6,7 +6,7 @@ import { requireAuth, requireCsrf } from '../plugins/auth.js';
 import { clampLimit } from '../lib/page.js';
 import { hydratePosts } from '../lib/hydrate.js';
 import { isBlocked, isFollowing, toPublicUser } from '../lib/users.js';
-import { assertNameChangeAllowed, assertPasswordChangeAllowed, toMeUser } from '../lib/cooldown.js';
+import { assertAvatarChangeAllowed, assertHandleChangeAllowed, assertPasswordChangeAllowed, toMeUser } from '../lib/cooldown.js';
 import { notify } from '../lib/notify.js';
 import { writeAudit } from '../lib/audit.js';
 import { sanitizeText } from '../lib/sanitize.js';
@@ -125,21 +125,22 @@ export async function userRoutes(app: FastifyInstance) {
     const body = updateProfileSchema.parse(req.body);
     const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
     if (!current) return reply.code(404).send({ error: 'Not found' });
-    const nextName = body.displayName ? sanitizeText(body.displayName) : current.displayName;
+    const nextName = body.displayName !== undefined ? sanitizeText(body.displayName) : current.displayName;
     const nextHandle = body.handle ?? current.handle;
-    const renaming = nextName !== current.displayName || nextHandle !== current.handle;
-    if (renaming) {
-      assertNameChangeAllowed(current);
+    const handleChanging = nextHandle !== current.handle;
+    const nameChanging = nextName !== current.displayName;
+    if (handleChanging) {
+      assertHandleChangeAllowed(current);
       const placeholder = current.email.endsWith('@users.invalid');
       if (placeholder) {
         return reply.code(403).send({
-          error: 'Add and verify a real email before changing your name',
+          error: 'Add and verify a real email before changing your username',
           code: 'EMAIL_REQUIRED',
         });
       }
       if (!current.emailVerifiedAt) {
         return reply.code(403).send({
-          error: 'Verify your email before changing your name',
+          error: 'Verify your email before changing your username',
           code: 'EMAIL_UNVERIFIED',
         });
       }
@@ -151,11 +152,8 @@ export async function userRoutes(app: FastifyInstance) {
       }
       const otp = await consumeOtpCode(app.redis, 'vo:name', current.id, body.verificationCode);
       if (!otp) return reply.code(400).send({ error: 'Invalid or expired code' });
-      if (
-        (otp.displayName && otp.displayName !== nextName) ||
-        (otp.handle && otp.handle !== nextHandle)
-      ) {
-        return reply.code(400).send({ error: 'Code does not match this name change. Request a new code.' });
+      if (otp.handle && otp.handle !== nextHandle) {
+        return reply.code(400).send({ error: 'Code does not match this username change. Request a new code.' });
       }
     }
     if (body.handle && body.handle !== current.handle) {
@@ -182,11 +180,11 @@ export async function userRoutes(app: FastifyInstance) {
       const [updated] = await app.db
         .update(users)
         .set({
-          ...(body.displayName ? { displayName: nextName } : {}),
+          ...(body.displayName !== undefined ? { displayName: nextName } : {}),
           ...(body.bio !== undefined ? { bio: nextBio } : {}),
           ...(body.handle ? { handle: body.handle } : {}),
           ...geoPatch,
-          ...(renaming ? { profileNameChangedAt: new Date() } : {}),
+          ...(handleChanging ? { profileNameChangedAt: new Date() } : {}),
           updatedAt: new Date(),
         })
         .where(eq(users.id, req.authUser!.id))
@@ -197,7 +195,11 @@ export async function userRoutes(app: FastifyInstance) {
       if (isUniqueViolation(err)) return reply.code(409).send({ error: 'Handle taken' });
       throw err;
     }
-    await writeAudit(app.db, req, renaming ? 'profile_name_change' : 'profile_update');
+    await writeAudit(
+      app.db,
+      req,
+      handleChanging ? 'profile_handle_change' : nameChanging ? 'profile_display_name_change' : 'profile_update',
+    );
     return { user: await toMeUser(app.db, app.env, app.s3, user) };
   });
 
@@ -215,7 +217,7 @@ export async function userRoutes(app: FastifyInstance) {
         .parse(req.body);
       const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
       if (!current) return reply.code(404).send({ error: 'Not found' });
-      assertNameChangeAllowed(current);
+      assertHandleChangeAllowed(current);
       if (current.email.endsWith('@users.invalid')) {
         return reply.code(403).send({ error: 'Add a real email first', code: 'EMAIL_REQUIRED' });
       }
@@ -224,8 +226,8 @@ export async function userRoutes(app: FastifyInstance) {
       }
       const nextName = body.displayName ? sanitizeText(body.displayName) : current.displayName;
       const nextHandle = body.handle ?? current.handle;
-      if (nextName === current.displayName && nextHandle === current.handle) {
-        return reply.code(400).send({ error: 'Nothing to change' });
+      if (nextHandle === current.handle) {
+        return reply.code(400).send({ error: 'Only username changes need a code' });
       }
       if (nextHandle !== current.handle) {
         const [taken] = await app.db
@@ -241,8 +243,8 @@ export async function userRoutes(app: FastifyInstance) {
       });
       await sendMail(app.env, req.log, {
         to: current.email,
-        subject: 'Your VoiceOut name change code',
-        text: `Your code is ${code}. It expires in 10 minutes.`,
+        kind: 'name_change_code',
+        code,
       });
       return { ok: true };
     },
@@ -270,8 +272,8 @@ export async function userRoutes(app: FastifyInstance) {
       const code = await issueOtpCode(app.redis, 'vo:email-link', current.id, { email: body.email });
       await sendMail(app.env, req.log, {
         to: body.email,
-        subject: 'Confirm your email for VoiceOut',
-        text: `Your code is ${code}. It expires in 10 minutes.`,
+        kind: 'email_link_code',
+        code,
       });
       return { ok: true };
     },
@@ -399,6 +401,9 @@ export async function userRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const body = z.object({ mediaId: z.string().uuid() }).parse(req.body);
+    const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+    if (!current) return reply.code(404).send({ error: 'Not found' });
+    assertAvatarChangeAllowed(current);
     const [media] = await app.db
       .select()
       .from(mediaObjects)
@@ -407,11 +412,11 @@ export async function userRoutes(app: FastifyInstance) {
     if (!media || media.kind !== 'avatar' || media.status !== 'ready') return reply.code(400).send({ error: 'Invalid photo' });
     const [user] = await app.db
       .update(users)
-      .set({ avatarMediaId: body.mediaId, updatedAt: new Date() })
+      .set({ avatarMediaId: body.mediaId, avatarChangedAt: new Date(), updatedAt: new Date() })
       .where(eq(users.id, req.authUser!.id))
       .returning();
     if (!user) return reply.code(404).send({ error: 'Not found' });
-    return { user: await toPublicUser(app.db, app.env, app.s3, user) };
+    return { user: await toMeUser(app.db, app.env, app.s3, user) };
   });
 
   app.get('/users/:handle', async (req, reply) => {

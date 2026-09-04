@@ -34,8 +34,13 @@ export const MAX_BIO_LENGTH = 160;
 export const MAX_DISPLAY_NAME_LENGTH = 50;
 export const HANDLE_MIN = 3;
 export const HANDLE_MAX = 20;
-export const NAME_CHANGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** Handle + avatar identity lock after a change. Display name is unrestricted. */
+export const HANDLE_CHANGE_MS = 3 * 24 * 60 * 60 * 1000;
+/** @deprecated use HANDLE_CHANGE_MS — kept for older imports */
+export const NAME_CHANGE_MS = HANDLE_CHANGE_MS;
 export const PASSWORD_CHANGE_MS = 3 * 24 * 60 * 60 * 1000;
+export const SHARE_CODE_MIN = 8;
+export const SHARE_CODE_MAX = 12;
 
 export const AUDIO_MIMES = [
   'audio/webm',

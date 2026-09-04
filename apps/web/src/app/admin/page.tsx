@@ -1,5 +1,7 @@
-import { redirect } from 'next/navigation';
+'use client';
 
-export default function AdminRedirectPage() {
-  redirect('/switch-acct');
+import { AdminConsole } from '@/components/AdminConsole';
+
+export default function AdminPage() {
+  return <AdminConsole />;
 }
