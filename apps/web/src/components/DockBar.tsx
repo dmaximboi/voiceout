@@ -190,7 +190,7 @@ export function DockBar({
   }
 
   const iconBtn =
-    'grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--text)] active:bg-[var(--bg)]';
+    'grid h-11 w-11 shrink-0 place-items-center rounded-full font-semibold text-[var(--text)] active:bg-[var(--bg)]';
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 lg:hidden">
@@ -205,7 +205,7 @@ export function DockBar({
 
       <div
         ref={dockRef}
-        className="relative border-t border-[var(--line)] bg-[var(--card)]/88 shadow-[0_-8px_32px_rgba(10,37,64,0.12)] backdrop-blur-xl"
+        className="relative border-t border-[var(--line)] bg-[var(--card)]/96 shadow-[0_-6px_24px_rgba(10,37,64,0.1)] backdrop-blur-md"
         onPointerDown={onBarDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -271,7 +271,7 @@ export function DockBar({
                   }
                   toggleDrops();
                 }}
-                className={`flex h-11 w-full items-center justify-center gap-2 rounded-full text-[15px] font-medium disabled:opacity-80 ${
+                className={`flex h-11 w-full items-center justify-center gap-2 rounded-full text-[15px] font-semibold disabled:opacity-80 ${
                   mode === 'drops' || dropHot
                     ? 'bg-accent text-white'
                     : hasUnread && !signalIcons.length

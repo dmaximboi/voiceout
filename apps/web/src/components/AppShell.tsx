@@ -96,7 +96,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-dvh bg-[var(--bg)] text-[var(--text)]">
-      <header className="sticky top-0 z-30 bg-[var(--card)]/78 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
+      <header className="sticky top-0 z-30 bg-[var(--card)]/95 pt-[env(safe-area-inset-top)] backdrop-blur-md">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-1 px-2 sm:px-3">
           <div className="flex w-10 shrink-0 justify-start">
             {atHome ? null : (
@@ -106,21 +106,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 className="grid h-9 w-9 place-items-center rounded-full text-[var(--text)] active:bg-[var(--bg)]"
                 onClick={() => router.back()}
               >
-                <ChevronLeft size={24} strokeWidth={2} />
+                <ChevronLeft size={24} strokeWidth={2.5} />
               </button>
             )}
           </div>
 
           <div className="flex min-w-0 flex-1 justify-center">
-            <div className="flex min-h-11 max-w-full items-center rounded-full bg-[var(--bg)] py-0.5 pl-1.5 pr-1 ring-1 ring-[var(--line)]">
-              <Link href="/" className="flex min-w-0 items-center gap-2 py-0.5 pl-0.5 pr-2 active:opacity-80">
-                <span className="h-8 w-8 shrink-0 overflow-hidden rounded-full">
-                  <Logo size={32} />
+            <div className="flex min-h-11 max-w-full items-center rounded-full bg-[var(--bg)] py-0.5 pl-2 pr-1 ring-1 ring-[var(--line)]">
+              <Link href="/" className="flex min-w-0 items-center gap-2.5 py-0.5 pl-0.5 pr-2.5 active:opacity-80">
+                <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl">
+                  <Logo size={40} wide />
                 </span>
                 <span className="flex min-w-0 flex-col justify-center leading-none">
-                  <span className="truncate text-[15px] font-semibold">VoiceOut</span>
+                  <span className="truncate text-[15px] font-bold tracking-tight text-[var(--text)]">VoiceOut</span>
                   {user ? (
-                    <span className="mt-0.5 truncate text-[11px] font-medium text-[var(--muted)]">
+                    <span className="mt-0.5 truncate text-[11px] font-semibold text-[var(--muted)]">
                       {user.displayName.trim().split(/\s+/)[0]}
                     </span>
                   ) : null}

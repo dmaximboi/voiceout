@@ -34,7 +34,7 @@ import { withIdempotency } from '../lib/idempotency.js';
 import { notify, notifyFollowersOfPost } from '../lib/notify.js';
 import { enqueue } from '../lib/queue.js';
 import { deleteObject } from '../lib/s3.js';
-import { generateShareCode, looksLikeShareCode, looksLikeUuid } from '../lib/shareCode.js';
+import { generateShareCode, looksLikeShareCode, looksLikeUuid, postIdParamSchema, resolvePostRef } from '../lib/shareCode.js';
 import { assertDailyQuota } from '../lib/quota.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { publicMediaUrl } from '../lib/s3.js';
@@ -131,7 +131,7 @@ export async function postRoutes(app: FastifyInstance) {
   });
 
   app.get('/posts/:id', async (req, reply) => {
-    const { id } = z.object({ id: z.string().min(8).max(64) }).parse(req.params);
+    const { id } = z.object({ id: postIdParamSchema() }).parse(req.params);
     const [post] = looksLikeUuid(id)
       ? await app.db.select().from(posts).where(eq(posts.id, id)).limit(1)
       : looksLikeShareCode(id)
@@ -147,7 +147,9 @@ export async function postRoutes(app: FastifyInstance) {
   app.post('/posts/:id/share-open', async (req, reply) => {
     requireAuth(req, reply);
     requireCsrf(req);
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { id: ref } = z.object({ id: postIdParamSchema() }).parse(req.params);
+    const id = await resolvePostRef(app.db, ref);
+    if (!id) return reply.code(404).send({ error: 'Not found' });
     const body = z.object({ via: z.string().uuid() }).parse(req.body);
     if (body.via === req.authUser!.id) return { ok: true };
     const [post] = await app.db.select({ id: posts.id }).from(posts).where(eq(posts.id, id)).limit(1);
@@ -227,7 +229,9 @@ export async function postRoutes(app: FastifyInstance) {
   app.put('/posts/:id/reactions', async (req, reply) => {
     requireAuth(req, reply);
     requireCsrf(req);
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { id: ref } = z.object({ id: postIdParamSchema() }).parse(req.params);
+    const id = await resolvePostRef(app.db, ref);
+    if (!id) return reply.code(404).send({ error: 'Not found' });
     const { type } = reactSchema.parse(req.body);
     const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!post || post.status !== 'published') return reply.code(404).send({ error: 'Not found' });
@@ -250,7 +254,9 @@ export async function postRoutes(app: FastifyInstance) {
   app.delete('/posts/:id/reactions', async (req, reply) => {
     requireAuth(req, reply);
     requireCsrf(req);
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { id: ref } = z.object({ id: postIdParamSchema() }).parse(req.params);
+    const id = await resolvePostRef(app.db, ref);
+    if (!id) return reply.code(404).send({ error: 'Not found' });
     await app.db
       .delete(postReactions)
       .where(and(eq(postReactions.postId, id), eq(postReactions.userId, req.authUser!.id)));
@@ -258,7 +264,9 @@ export async function postRoutes(app: FastifyInstance) {
   });
 
   app.get('/posts/:id/comments', async (req, reply) => {
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { id: ref } = z.object({ id: postIdParamSchema() }).parse(req.params);
+    const id = await resolvePostRef(app.db, ref);
+    if (!id) return reply.code(404).send({ error: 'Not found' });
     const [shared] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!shared || (shared.status !== 'published' && shared.authorId !== req.authUser?.id)) {
       return reply.code(404).send({ error: 'Not found' });
@@ -325,7 +333,9 @@ export async function postRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireVerifiedIdentity(req);
     requireCsrf(req);
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { id: ref } = z.object({ id: postIdParamSchema() }).parse(req.params);
+    const id = await resolvePostRef(app.db, ref);
+    if (!id) return reply.code(404).send({ error: 'Not found' });
     const body = createCommentSchema.parse(req.body);
     const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!post || post.status !== 'published') return reply.code(404).send({ error: 'Not found' });
