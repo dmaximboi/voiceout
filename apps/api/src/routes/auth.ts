@@ -25,8 +25,8 @@ import {
   type TelegramBotProfile,
 } from '../lib/telegram.js';
 
-const LOCK_AFTER = 12;
-const LOCK_MS = 5 * 60 * 1000;
+const LOCK_AFTER = 25;
+const LOCK_MS = 2 * 60 * 1000;
 const TG_LOGIN_TTL = 300;
 
 export async function authRoutes(app: FastifyInstance) {
@@ -119,6 +119,11 @@ export async function authRoutes(app: FastifyInstance) {
           })
           .where(eq(users.id, user.id));
         return reply.code(401).send({ error: 'Invalid credentials' });
+      }
+      // Drop whatever session cookie was on this browser so we never keep the previous account.
+      const prior = readCookies(req).refresh;
+      if (prior) {
+        await app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(prior)));
       }
       await asDbUser(app.db, user.id);
       const sealed = await ensureUserSealed(app.db, app.env, user);

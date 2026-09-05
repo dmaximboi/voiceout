@@ -526,9 +526,16 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
       <button
         type="button"
         className="mt-6 flex min-h-11 items-center rounded-full border border-red-200 px-5 text-sm font-semibold text-red-600 active:bg-[var(--bg)]"
-        onClick={() => void logout().then(() => router.push('/login'))}
+        onClick={() => void logout().then(() => router.push('/login?switch=1'))}
       >
         Log out
+      </button>
+      <button
+        type="button"
+        className="mt-2 flex min-h-11 items-center rounded-full border border-[var(--line)] px-5 text-sm font-semibold active:bg-[var(--bg)]"
+        onClick={() => void logout().then(() => router.push('/login?switch=1'))}
+      >
+        Switch account
       </button>
     </div>
   );

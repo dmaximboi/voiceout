@@ -195,11 +195,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void logout().then(() => router.push('/login'))}
+                  onClick={() => void logout().then(() => router.push('/login?switch=1'))}
                   className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-[var(--line)] text-sm text-red-600 active:bg-[var(--bg)]"
                 >
                   <LogOut size={16} strokeWidth={2} />
                   Log out
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void logout().then(() => router.push('/login?switch=1'))}
+                  className="mt-2 flex min-h-11 w-full items-center justify-center rounded-full border border-[var(--line)] text-sm font-semibold active:bg-[var(--bg)]"
+                >
+                  Switch account
                 </button>
               </div>
             ) : (
