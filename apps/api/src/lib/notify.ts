@@ -36,6 +36,25 @@ export async function notify(
       .limit(1);
     if (existing) return;
   }
+  // One drop per actor+post for likes/reposts/bookmarks — like/unlike/relike must not spam.
+  if (
+    (input.type === 'reaction' || input.type === 'repost' || input.type === 'bookmark') &&
+    input.postId
+  ) {
+    const [existing] = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, input.userId),
+          eq(notifications.actorId, input.actorId),
+          eq(notifications.type, input.type),
+          eq(notifications.postId, input.postId),
+        ),
+      )
+      .limit(1);
+    if (existing) return;
+  }
   await db.insert(notifications).values({
     userId: input.userId,
     actorId: input.actorId,

@@ -1,8 +1,8 @@
 const KB = 1024;
 /** Leave files already under this alone. */
 const LEAVE_UNDER = 200 * KB;
-/** Compress larger images down toward this ceiling. */
-const TARGET_MAX = 280 * KB;
+/** Compress larger images down to this ceiling. */
+const TARGET_MAX = 200 * KB;
 const HARD_MAX = 3_000_000;
 
 function allowedMime(type: string) {
@@ -38,11 +38,10 @@ export async function compressImage(file: File): Promise<File> {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not compress photo');
 
-  const target = Math.min(TARGET_MAX, Math.max(LEAVE_UNDER, file.size));
   let maxSide = Math.min(1600, Math.max(bitmap.width, bitmap.height));
   let best: Blob | null = null;
 
-  for (let round = 0; round < 7; round++) {
+  for (let round = 0; round < 8; round++) {
     const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
@@ -50,9 +49,9 @@ export async function compressImage(file: File): Promise<File> {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-    let lo = 0.42;
-    let hi = 0.88;
-    for (let i = 0; i < 8; i++) {
+    let lo = 0.35;
+    let hi = 0.9;
+    for (let i = 0; i < 9; i++) {
       const q = (lo + hi) / 2;
       const blob = await canvasToJpeg(canvas, q);
       if (!blob) break;
@@ -61,8 +60,8 @@ export async function compressImage(file: File): Promise<File> {
       else lo = q;
     }
     if (best && best.size <= TARGET_MAX) break;
-    maxSide = Math.round(maxSide * 0.75);
-    if (maxSide < 480) break;
+    maxSide = Math.round(maxSide * 0.72);
+    if (maxSide < 400) break;
   }
 
   try {
@@ -75,7 +74,6 @@ export async function compressImage(file: File): Promise<File> {
   if (file.size <= LEAVE_UNDER && best.size >= file.size && (type === 'image/jpeg' || type === 'image/png' || type === 'image/webp')) {
     return file;
   }
-  void target;
   return new File([best], 'photo.jpg', { type: 'image/jpeg', lastModified: Date.now() });
 }
 

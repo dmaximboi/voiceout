@@ -59,7 +59,9 @@ function PostPageInner() {
     try {
       const p = await api<{ post: PostCard }>(`/posts/${id}`);
       setPost(p.post);
-      const c = await api<{ comments: CommentCard[] }>(`/posts/${id}/comments`);
+      // Prefer UUID for nested routes — share codes used to fail Zod uuid checks.
+      const postKey = p.post.id || id;
+      const c = await api<{ comments: CommentCard[] }>(`/posts/${postKey}/comments`);
       setComments(c.comments);
       setMissing(false);
     } catch (err) {
@@ -69,7 +71,7 @@ function PostPageInner() {
         setMissing(true);
         return;
       }
-      setFatal(err instanceof Error ? err : new Error('Could not load this voice'));
+      setFatal(new Error('Could not load this voice'));
     }
   }
 

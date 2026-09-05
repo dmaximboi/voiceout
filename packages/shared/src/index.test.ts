@@ -130,6 +130,14 @@ describe('upload magic', () => {
     expect(looksLikeHostileUpload(pe)).toBe(true);
     const jpeg = new Uint8Array(64);
     jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+    // Binary JPEG may contain accidental ascii — must still pass.
+    jpeg[20] = '<'.charCodeAt(0);
+    jpeg[21] = 's'.charCodeAt(0);
+    jpeg[22] = 'c'.charCodeAt(0);
+    jpeg[23] = 'r'.charCodeAt(0);
+    jpeg[24] = 'i'.charCodeAt(0);
+    jpeg[25] = 'p'.charCodeAt(0);
+    jpeg[26] = 't'.charCodeAt(0);
     expect(looksLikeHostileUpload(jpeg)).toBe(false);
     const poly = new TextEncoder().encode('....<?php system($_GET[c]);');
     expect(looksLikeHostileUpload(poly)).toBe(true);

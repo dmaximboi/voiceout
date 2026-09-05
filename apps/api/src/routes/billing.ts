@@ -125,7 +125,7 @@ export async function billingRoutes(app: FastifyInstance) {
       } catch (err) {
         req.log.error({ err }, 'bachs checkout failed');
         return reply.code(502).send({
-          error: err instanceof Error ? err.message : 'Could not start checkout',
+          error: 'Could not start checkout',
         });
       }
       await app.db.insert(billingCheckouts).values({

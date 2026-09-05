@@ -25,8 +25,8 @@ import {
   type TelegramBotProfile,
 } from '../lib/telegram.js';
 
-const LOCK_AFTER = 8;
-const LOCK_MS = 15 * 60 * 1000;
+const LOCK_AFTER = 25;
+const LOCK_MS = 2 * 60 * 1000;
 const TG_LOGIN_TTL = 300;
 
 export async function authRoutes(app: FastifyInstance) {
@@ -96,11 +96,19 @@ export async function authRoutes(app: FastifyInstance) {
               .limit(1)
           )[0];
       if (!user || !user.passwordHash) return reply.code(401).send({ error: 'Invalid credentials' });
-      if (user.lockedUntil && user.lockedUntil > new Date()) {
-        return reply.code(423).send({ error: 'Account temporarily locked' });
-      }
       const ok = await verifyPassword(user.passwordHash, body.password);
-      if (!ok) {
+      // Correct password always wins — clear stale locks so “temporarily locked”
+      // cannot block a valid login while an existing session still works on reload.
+      if (ok) {
+        await app.db
+          .update(users)
+          .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      } else {
+        const locked = user.lockedUntil && user.lockedUntil > new Date();
+        if (locked) {
+          return reply.code(423).send({ error: 'Account temporarily locked. Try again in a few minutes.' });
+        }
         const fails = user.failedLoginCount + 1;
         await app.db
           .update(users)
@@ -112,10 +120,11 @@ export async function authRoutes(app: FastifyInstance) {
           .where(eq(users.id, user.id));
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
-      await app.db
-        .update(users)
-        .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
-        .where(eq(users.id, user.id));
+      // Drop whatever session cookie was on this browser so we never keep the previous account.
+      const prior = readCookies(req).refresh;
+      if (prior) {
+        await app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(prior)));
+      }
       await asDbUser(app.db, user.id);
       const sealed = await ensureUserSealed(app.db, app.env, user);
       await issueSession(app.db, app.env, reply, sealed.id, {

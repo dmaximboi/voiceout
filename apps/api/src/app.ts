@@ -118,13 +118,15 @@ export async function buildApp(opts: {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ZodError) {
       req.log.warn({ err }, 'invalid input');
-      const first =
-        err.issues[0]?.message && err.issues[0].message !== 'Invalid input'
-          ? err.issues[0].message
+      const firstIssue = err.issues[0];
+      const raw =
+        firstIssue?.message && firstIssue.message !== 'Invalid input'
+          ? firstIssue.message
           : err.flatten().formErrors[0] ||
             Object.values(err.flatten().fieldErrors).flat()[0] ||
             'Invalid input';
-      return reply.code(400).send({ error: first, details: err.flatten() });
+      const first = /uuid/i.test(String(raw)) ? 'Invalid request' : String(raw);
+      return reply.code(400).send({ error: first });
     }
     if (err instanceof HttpError) {
       req.log.warn({ err, status: err.statusCode }, err.message);
@@ -134,10 +136,21 @@ export async function buildApp(opts: {
       return reply.code(err.statusCode).send({ error: err.message, ...err.extra });
     }
     const status = (err as { statusCode?: number }).statusCode ?? 500;
-    if (status >= 500) req.log.error(err);
-    else req.log.warn({ err, status }, err instanceof Error ? err.message : 'request error');
-    const message = err instanceof Error ? err.message : 'Error';
-    return reply.code(status).send({ error: status === 500 ? 'Server error' : message });
+    const raw = err instanceof Error ? err.message : '';
+    const leaksDb =
+      /sqlstate|postgres|drizzle|econnrefused|econnreset|relation "|column "|duplicate key|violates |syntax error|deadlock|timeout exceeded/i.test(
+        raw,
+      );
+    if (status >= 500 || leaksDb) {
+      req.log.error(err);
+      return reply.code(status >= 500 ? status : 500).send({ error: 'Server error' });
+    }
+    req.log.warn({ err, status }, raw || 'request error');
+    const safe =
+      raw && raw.length < 160 && !/at\s+\S+\s+\(|\/node_modules\/|\\node_modules\\/i.test(raw)
+        ? raw
+        : 'Request failed';
+    return reply.code(status).send({ error: safe });
   });
 
   app.get('/health', async () => ({ ok: true, service: 'api' }));

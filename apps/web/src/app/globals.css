@@ -5,8 +5,8 @@
 :root {
   --bg: #eef5fb;
   --card: #ffffff;
-  --text: #0a2540;
-  --muted: #5a7190;
+  --text: #061828;
+  --muted: #2a3f55;
   --line: #d5e4f2;
   --accent: #2b8cff;
   --header-h: calc(3.5rem + env(safe-area-inset-top, 0px));
@@ -15,8 +15,8 @@
 .dark {
   --bg: #0a2540;
   --card: #0f3060;
-  --text: #f4f8fc;
-  --muted: #9bb0c9;
+  --text: #ffffff;
+  --muted: #d7e4f2;
   --line: #1a3d66;
   --accent: #5eb0ff;
 }

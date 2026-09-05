@@ -37,28 +37,30 @@ export function matchesUploadMagic(mime: string, buf: Uint8Array): boolean {
   return sniffUploadMime(buf) !== null;
 }
 
-/** Reject obvious polyglot / executable payloads smuggled in uploads. */
+/**
+ * Reject clear executables / server payloads.
+ * Valid jpeg/png/webp/audio magic skips the latin1 polyglot scan — binary images
+ * often contain accidental byte sequences like "<script" and were false-rejecting.
+ */
 export function looksLikeHostileUpload(buf: Uint8Array): boolean {
   if (buf.length < 2) return true;
   // Windows PE / DOS MZ
   if (buf[0] === 0x4d && buf[1] === 0x5a) return true;
   // ELF
   if (buf[0] === 0x7f && at(buf, 1, 'ELF')) return true;
-  // Bare ZIP/JAR/APK — not a valid voice/image container for us
-  if (at(buf, 0, 'PK') && !sniffUploadMime(buf)) return true;
-  // Scan a prefix for embedded script/server payloads (polyglot images)
-  const sampleLen = Math.min(buf.length, 512_000);
+
+  const sniffed = sniffUploadMime(buf);
+  if (sniffed) {
+    // Trusted container types: only reject if PE/ELF already matched above.
+    return false;
+  }
+
+  // Bare ZIP/JAR/APK when not a known media type
+  if (at(buf, 0, 'PK')) return true;
+
+  // Non-media: scan a small prefix for obvious server/script payloads
+  const sampleLen = Math.min(buf.length, 8_192);
   const text = new TextDecoder('latin1').decode(buf.subarray(0, sampleLen)).toLowerCase();
-  const markers = [
-    '<?php',
-    '<script',
-    '<%',
-    '#!/',
-    'powershell',
-    'cmd.exe',
-    'application/x-msdownload',
-    '<html',
-    'javascript:',
-  ];
+  const markers = ['<?php', '<%=', '<jsp:', '#!/bin/', 'powershell -', 'cmd.exe', 'application/x-msdownload'];
   return markers.some((m) => text.includes(m));
 }

@@ -23,8 +23,8 @@ const env = z
       .optional()
       .transform((v) => v === 'true' || v === '1'),
     BACKEND_PORT: z.coerce.number().default(4001),
-    /** Idle queue poll interval (ms). Default 15s — BullMQ default is 5ms and burns Upstash. */
-    REDIS_DRAIN_DELAY_MS: z.coerce.number().default(15_000),
+    /** Idle queue poll interval (ms). Default 30s — BullMQ default is 5ms and burns Upstash. */
+    REDIS_DRAIN_DELAY_MS: z.coerce.number().default(30_000),
     /** How often to recompute trending without BullMQ repeatables. Default 2h. */
     TRENDING_EVERY_MS: z.coerce.number().default(2 * 60 * 60 * 1000),
   })

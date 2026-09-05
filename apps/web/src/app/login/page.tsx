@@ -21,23 +21,25 @@ export default function LoginPage() {
 }
 
 function LoginPageInner() {
-  const { user, loading, applyUser } = useAuth();
+  const { user, loading, applyUser, logout } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const next = safeNextPath(params.get('next'));
   const resetToken = params.get('reset');
   const verifyToken = params.get('verify');
+  const wantSwitch = params.get('switch') === '1';
 
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [switching, setSwitching] = useState(wantSwitch);
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login');
 
   useEffect(() => {
-    if (!loading && user) router.replace(next);
-  }, [user, loading, router, next]);
+    if (!loading && user && !switching) router.replace(next);
+  }, [user, loading, router, next, switching]);
 
   useEffect(() => {
     const err = params.get('error');
@@ -74,12 +76,19 @@ function LoginPageInner() {
     setError(null);
     setBusy(true);
     try {
+      // Always drop the previous browser session before claiming a new account.
+      if (user) {
+        await logout().catch(() => undefined);
+        clearCsrf();
+        applyUser(null);
+      }
       const data = await api<{ user: MeUser }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ login, password }),
       });
       clearCsrf();
       applyUser(data.user);
+      setSwitching(false);
       router.replace(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -127,8 +136,12 @@ function LoginPageInner() {
     }
   }
 
-  if (loading || user) {
+  if (loading) {
     return <p className="px-4 py-10 text-center text-sm text-[var(--muted)]">Checking your session.</p>;
+  }
+
+  if (user && !switching) {
+    return <p className="px-4 py-10 text-center text-sm text-[var(--muted)]">Taking you in…</p>;
   }
 
   return (
@@ -139,6 +152,11 @@ function LoginPageInner() {
       <h1 className="mt-3 text-center text-2xl font-bold">
         {mode === 'forgot' ? 'Reset password' : mode === 'reset' ? 'Choose a new password' : 'Log in to VoiceOut'}
       </h1>
+      {user && switching ? (
+        <p className="mt-2 text-center text-sm text-[var(--muted)]">
+          Currently @{user.handle}. Sign in below to switch accounts.
+        </p>
+      ) : null}
       {notice ? <p className="mt-3 text-center text-sm text-accent">{notice}</p> : null}
 
       {mode === 'login' ? (

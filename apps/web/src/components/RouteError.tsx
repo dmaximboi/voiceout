@@ -17,7 +17,7 @@ export function RouteError({
     <div className="px-4 py-10">
       <h1 className="text-lg font-semibold">Something went wrong</h1>
       <p className="mt-2 text-sm text-[var(--muted)]">
-        {error.message || 'This screen hit an error. You can try again.'}
+        This screen hit an error. You can try again.
       </p>
       <button
         type="button"
