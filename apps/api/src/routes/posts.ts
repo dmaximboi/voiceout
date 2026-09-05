@@ -235,6 +235,11 @@ export async function postRoutes(app: FastifyInstance) {
     const { type } = reactSchema.parse(req.body);
     const [post] = await app.db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!post || post.status !== 'published') return reply.code(404).send({ error: 'Not found' });
+    const [prior] = await app.db
+      .select({ type: postReactions.type })
+      .from(postReactions)
+      .where(and(eq(postReactions.postId, id), eq(postReactions.userId, req.authUser!.id)))
+      .limit(1);
     await app.db
       .insert(postReactions)
       .values({ postId: id, userId: req.authUser!.id, type })
@@ -242,12 +247,15 @@ export async function postRoutes(app: FastifyInstance) {
         target: [postReactions.postId, postReactions.userId],
         set: { type },
       });
-    await notify(app.db, {
-      userId: post.authorId,
-      actorId: req.authUser!.id,
-      type: 'reaction',
-      postId: id,
-    });
+    // Notify only the first time this user reacts to this post (not relike / type switch spam).
+    if (!prior) {
+      await notify(app.db, {
+        userId: post.authorId,
+        actorId: req.authUser!.id,
+        type: 'reaction',
+        postId: id,
+      });
+    }
     return { ok: true, type };
   });
 
