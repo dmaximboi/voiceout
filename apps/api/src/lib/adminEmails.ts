@@ -1,8 +1,14 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { users, type Db } from '@voiceout/db';
 import type { Env } from '../env.js';
+import { withRlsOff } from './rls.js';
 
-type BootstrapUser = typeof users.$inferSelect;
+type BootstrapUser = {
+  id: string;
+  email: string;
+  emailVerifiedAt: Date | null;
+  role: (typeof users.$inferSelect)['role'];
+};
 
 export function parseAdminEmails(env: Env): Set<string> {
   return new Set(
@@ -13,16 +19,20 @@ export function parseAdminEmails(env: Env): Set<string> {
   );
 }
 
-/** Promote bootstrap admins listed in ADMIN_EMAILS (comma-separated). */
-export async function ensureBootstrapAdmin(db: Db, env: Env, user: BootstrapUser): Promise<BootstrapUser> {
+/**
+ * Promote bootstrap admins listed in ADMIN_EMAILS (comma-separated). Only once the inbox is
+ * proven: anyone can register an unclaimed listed address.
+ */
+export async function ensureBootstrapAdmin<T extends BootstrapUser>(
+  db: Db,
+  env: Env,
+  user: T,
+): Promise<T> {
   const emails = parseAdminEmails(env);
   if (!emails.has(user.email.toLowerCase())) return user;
-  if (user.role === 'admin') return user;
-  await db.execute(sql`select set_config('app.rls', 'off', true)`);
-  const [updated] = await db
-    .update(users)
-    .set({ role: 'admin', updatedAt: new Date() })
-    .where(eq(users.id, user.id))
-    .returning();
-  return updated ?? { ...user, role: 'admin' };
+  if (user.role === 'admin' || !user.emailVerifiedAt) return user;
+  await withRlsOff(db, () =>
+    db.update(users).set({ role: 'admin', updatedAt: new Date() }).where(eq(users.id, user.id)),
+  );
+  return { ...user, role: 'admin' };
 }

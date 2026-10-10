@@ -4,6 +4,23 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError, clearCsrf } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { safeNextPath } from '@/lib/paths';
+
+const claiming = new Map<string, Promise<{ next: string }>>();
+
+function claimHandoff(k: string, next: string) {
+  const existing = claiming.get(k);
+  if (existing) return existing;
+  const request = (async () => {
+    clearCsrf();
+    return api<{ ok: true; next: string }>('/auth/handoff/claim', {
+      method: 'POST',
+      body: JSON.stringify({ k, next }),
+    });
+  })();
+  claiming.set(k, request);
+  return request;
+}
 
 function DeviceLoginInner() {
   const params = useSearchParams();
@@ -13,7 +30,7 @@ function DeviceLoginInner() {
 
   useEffect(() => {
     const k = params.get('k')?.trim() ?? '';
-    const next = params.get('next') ?? '/';
+    const next = safeNextPath(params.get('next'));
     if (!k) {
       setError('Missing sign-in link');
       return;
@@ -21,17 +38,23 @@ function DeviceLoginInner() {
     let cancelled = false;
     void (async () => {
       try {
-        clearCsrf();
-        const data = await api<{ ok: true; next: string }>('/auth/handoff/claim', {
-          method: 'POST',
-          body: JSON.stringify({ k, next }),
-        });
+        const data = await claimHandoff(k, next);
         if (cancelled) return;
         clearCsrf();
         await refresh();
-        router.replace(data.next || '/');
+        router.replace(safeNextPath(data.next));
       } catch (err) {
         if (cancelled) return;
+        try {
+          await refresh();
+          const me = await api<{ user: { id: string } }>('/auth/me');
+          if (me.user?.id) {
+            router.replace(next);
+            return;
+          }
+        } catch {
+          /* still unsigned-in */
+        }
         setError(err instanceof ApiError || err instanceof Error ? err.message : 'Sign-in failed');
       }
     })();
@@ -44,7 +67,10 @@ function DeviceLoginInner() {
     return (
       <div className="mx-auto max-w-md px-4 py-16 text-center">
         <p className="text-sm text-red-600">{error}</p>
-        <a href="/login" className="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-accent">
+        <a
+          href="/login"
+          className="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-accent"
+        >
           Go to login
         </a>
       </div>
@@ -56,7 +82,11 @@ function DeviceLoginInner() {
 
 export default function DeviceLoginPage() {
   return (
-    <Suspense fallback={<p className="px-4 py-16 text-center text-sm text-[var(--muted)]">Signing you in…</p>}>
+    <Suspense
+      fallback={
+        <p className="px-4 py-16 text-center text-sm text-[var(--muted)]">Signing you in…</p>
+      }
+    >
       <DeviceLoginInner />
     </Suspense>
   );

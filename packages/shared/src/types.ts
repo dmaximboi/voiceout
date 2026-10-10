@@ -1,5 +1,7 @@
 import type {
   CommentCategory,
+  ContentShelf,
+  ContentTopic,
   DurationCap,
   FeedEventType,
   FeedFeedbackKind,
@@ -38,6 +40,8 @@ export type MeUser = PublicUser & {
   nameChangeAvailableAt: string;
   avatarChangeAvailableAt: string;
   passwordChangeAvailableAt: string;
+  city: string | null;
+  country: string | null;
 };
 
 export type PostCard = {
@@ -63,6 +67,8 @@ export type PostCard = {
   status: 'pending' | 'published' | 'rejected';
   categories: Partial<Record<CommentCategory, number>>;
   rankReasons: string[];
+  shelf: ContentShelf | null;
+  topic: ContentTopic | null;
 };
 
 export type FeedItem = {

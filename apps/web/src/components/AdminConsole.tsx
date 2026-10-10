@@ -88,11 +88,21 @@ export function AdminConsole() {
       </div>
 
       {tab === 'users' ? (
-        <UsersPanel unlocked={step.unlocked} isAdmin={user.role === 'admin'} onNeedUnlock={() => void step.refresh()} />
+        <UsersPanel
+          unlocked={step.unlocked}
+          isAdmin={user.role === 'admin'}
+          onNeedUnlock={() => void step.refresh()}
+        />
       ) : null}
-      {tab === 'reports' ? <ReportsPanel unlocked={step.unlocked} onNeedUnlock={() => void step.refresh()} /> : null}
+      {tab === 'reports' ? (
+        <ReportsPanel unlocked={step.unlocked} onNeedUnlock={() => void step.refresh()} />
+      ) : null}
       {tab === 'plans' ? (
-        <PlansPanel unlocked={step.unlocked} isAdmin={user.role === 'admin'} onNeedUnlock={() => void step.refresh()} />
+        <PlansPanel
+          unlocked={step.unlocked}
+          isAdmin={user.role === 'admin'}
+          onNeedUnlock={() => void step.refresh()}
+        />
       ) : null}
       {tab === 'audit' ? (
         user.role === 'admin' ? (
@@ -170,7 +180,11 @@ function UsersPanel({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <button type="submit" disabled={busy || !q.trim()} className="min-h-11 rounded-full bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={busy || !q.trim()}
+          className="min-h-11 rounded-full bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50"
+        >
           Search
         </button>
       </form>
@@ -191,7 +205,11 @@ function UsersPanel({
               <button
                 type="button"
                 className="min-h-10 rounded-full border border-[var(--line)] px-3 text-sm font-semibold"
-                onClick={() => void act(`/admin/users/${u.id}/warn`, { message: 'Please follow VoiceOut community guidelines.' })}
+                onClick={() =>
+                  void act(`/admin/users/${u.id}/warn`, {
+                    message: 'Please follow VoiceOut community guidelines.',
+                  })
+                }
               >
                 Warn
               </button>
@@ -210,7 +228,9 @@ function UsersPanel({
                       type="button"
                       className="min-h-10 rounded-full border border-red-200 px-3 text-sm font-semibold text-red-600"
                       onClick={() =>
-                        void act(`/admin/users/${u.id}/suspend`, { reason: 'Manual suspension from admin panel' })
+                        void act(`/admin/users/${u.id}/suspend`, {
+                          reason: 'Manual suspension from admin panel',
+                        })
                       }
                     >
                       Suspend
@@ -265,13 +285,17 @@ function ReportsPanel({ unlocked, onNeedUnlock }: { unlocked: boolean; onNeedUnl
   return (
     <div className="mt-4 space-y-3">
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
-      {items.length === 0 ? <p className="text-sm text-[var(--muted)]">No pending reports.</p> : null}
+      {items.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">No pending reports.</p>
+      ) : null}
       {items.map((r) => (
         <article key={r.id} className="rounded-2xl border border-[var(--line)] p-3">
           <p className="text-sm font-semibold">
             {r.targetType} · {r.reason}
           </p>
-          <p className="mt-1 text-xs text-[var(--muted)]">{new Date(r.createdAt).toLocaleString()}</p>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            {new Date(r.createdAt).toLocaleString()}
+          </p>
           {r.details ? <p className="mt-2 text-sm">{r.details}</p> : null}
           <div className="mt-3 flex gap-2">
             <button
@@ -327,10 +351,11 @@ function PlansPanel({
       const found = await api<{ users: AdminUser[] }>(
         `/admin/users/search?q=${encodeURIComponent(handle.trim())}`,
       );
-      const match =
-        found.users.find((u) => u.handle === handle.trim().toLowerCase()) ?? found.users[0];
+      const match = found.users.find(
+        (u) => u.handle === handle.trim().toLowerCase().replace(/^@/, ''),
+      );
       if (!match) {
-        setError('No user found');
+        setError('No user with that exact handle');
         return;
       }
       await api(`/admin/users/${match.id}/plan`, {
@@ -356,10 +381,11 @@ function PlansPanel({
       const found = await api<{ users: AdminUser[] }>(
         `/admin/users/search?q=${encodeURIComponent(handle.trim())}`,
       );
-      const match =
-        found.users.find((u) => u.handle === handle.trim().toLowerCase()) ?? found.users[0];
+      const match = found.users.find(
+        (u) => u.handle === handle.trim().toLowerCase().replace(/^@/, ''),
+      );
       if (!match) {
-        setError('No user found');
+        setError('No user with that exact handle');
         return;
       }
       await api(`/admin/users/${match.id}/studio/revoke`, { method: 'POST', body: '{}' });
@@ -371,7 +397,10 @@ function PlansPanel({
   }
 
   return (
-    <form onSubmit={(e) => void grant(e)} className="mt-4 space-y-3 rounded-2xl border border-[var(--line)] p-4">
+    <form
+      onSubmit={(e) => void grant(e)}
+      className="mt-4 space-y-3 rounded-2xl border border-[var(--line)] p-4"
+    >
       <input
         className="min-h-11 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3"
         placeholder="Handle"
@@ -404,7 +433,10 @@ function PlansPanel({
         />
       </label>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className="min-h-11 rounded-full bg-accent px-4 text-sm font-semibold text-white">
+        <button
+          type="submit"
+          className="min-h-11 rounded-full bg-accent px-4 text-sm font-semibold text-white"
+        >
           Grant plan
         </button>
         <button
@@ -437,7 +469,8 @@ function AuditPanel() {
       {items.map((row) => (
         <div key={row.id} className="rounded-xl border border-[var(--line)] px-3 py-2 text-sm">
           <p className="font-semibold">
-            {row.action} {row.handle ? <span className="text-[var(--muted)]">@{row.handle}</span> : null}
+            {row.action}{' '}
+            {row.handle ? <span className="text-[var(--muted)]">@{row.handle}</span> : null}
           </p>
           <p className="text-xs text-[var(--muted)]">{new Date(row.createdAt).toLocaleString()}</p>
         </div>

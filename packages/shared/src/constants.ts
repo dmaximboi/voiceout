@@ -137,7 +137,86 @@ export const RESERVED_HANDLES = [
   'settings',
   'support',
   'trending',
+  'welcome',
   'www',
 ] as const;
+
+export const CONTENT_SHELVES = ['idea', 'information', 'news', 'education'] as const;
+export type ContentShelf = (typeof CONTENT_SHELVES)[number];
+
+export const CONTENT_SHELF_LABELS: Record<ContentShelf, string> = {
+  idea: 'Idea',
+  information: 'Information',
+  news: 'News',
+  education: 'Education',
+};
+
+export const CONTENT_TOPICS = ['music', 'sports', 'faith', 'tech', 'food', 'travel'] as const;
+export type ContentTopic = (typeof CONTENT_TOPICS)[number];
+
+export const CONTENT_TOPIC_LABELS: Record<ContentTopic, string> = {
+  music: 'Music',
+  sports: 'Sports',
+  faith: 'Faith',
+  tech: 'Tech',
+  food: 'Food',
+  travel: 'Travel',
+};
+
+const SHELF_WORDS: Record<ContentShelf, string[]> = {
+  idea: ['idea', 'thought', 'imagine', 'what if', 'concept', 'dream', 'maybe we'],
+  information: ['info', 'update', 'tip', 'how to', 'guide', 'heads up', 'psa', 'fyi', 'note'],
+  news: ['news', 'breaking', 'just happened', 'today', 'report', 'happening', 'headline'],
+  education: ['learn', 'lesson', 'teach', 'study', 'explain', 'class', 'history', 'science'],
+};
+
+const TOPIC_WORDS: Record<ContentTopic, string[]> = {
+  music: ['music', 'song', 'album', 'beat', 'concert'],
+  sports: ['sport', 'match', 'game', 'football', 'soccer', 'basketball'],
+  faith: ['faith', 'prayer', 'church', 'mosque', 'gospel'],
+  tech: ['tech', 'app', 'software', 'code', 'startup'],
+  food: ['food', 'recipe', 'cook', 'kitchen', 'meal'],
+  travel: ['travel', 'trip', 'flight', 'airport', 'visa'],
+};
+
+function hits(text: string, words: string[]) {
+  return words.reduce((n, word) => n + (text.includes(word) ? 1 : 0), 0);
+}
+
+export function classifyCaptionShelf(caption: string): ContentShelf | null {
+  const text = caption.toLowerCase();
+  let best: ContentShelf | null = null;
+  let score = 0;
+  for (const shelf of CONTENT_SHELVES) {
+    const n = hits(text, SHELF_WORDS[shelf]);
+    if (n > score) {
+      score = n;
+      best = shelf;
+    }
+  }
+  return score > 0 ? best : null;
+}
+
+export function classifyCaptionTopic(caption: string): ContentTopic | null {
+  const text = caption.toLowerCase();
+  let best: ContentTopic | null = null;
+  let score = 0;
+  for (const topic of CONTENT_TOPICS) {
+    const n = hits(text, TOPIC_WORDS[topic]);
+    if (n > score) {
+      score = n;
+      best = topic;
+    }
+  }
+  return score >= 2 ? best : null;
+}
+
+export function parseContentShelf(value: string | null | undefined): ContentShelf | null {
+  return value && (CONTENT_SHELVES as readonly string[]).includes(value) ? (value as ContentShelf) : null;
+}
+
+export function parseContentTopic(value: string | null | undefined): ContentTopic | null {
+  return value && (CONTENT_TOPICS as readonly string[]).includes(value) ? (value as ContentTopic) : null;
+}
 
 export const DURATION_PROBE_SLACK_MS = 1500;

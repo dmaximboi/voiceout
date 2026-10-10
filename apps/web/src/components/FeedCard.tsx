@@ -537,6 +537,15 @@ export function FeedCard({
               {post.caption}
             </Link>
           )}
+          {post.shelf || post.topic ? (
+            <p className="mt-1 text-xs font-semibold text-[var(--muted)]">
+              {[post.shelf, post.topic]
+                .filter(Boolean)
+                .map((value) => value!.replace(/_/g, ' '))
+                .map((value) => value.charAt(0).toUpperCase() + value.slice(1))
+                .join(' · ')}
+            </p>
+          ) : null}
           {post.videoUrl ? (
             <video
               className="mt-3 w-full rounded-xl bg-black"

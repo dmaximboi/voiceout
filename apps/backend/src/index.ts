@@ -23,8 +23,8 @@ const env = z
       .optional()
       .transform((v) => v === 'true' || v === '1'),
     BACKEND_PORT: z.coerce.number().default(4001),
-    /** Idle queue poll interval (ms). Default 30s — BullMQ default is 5ms and burns Upstash. */
-    REDIS_DRAIN_DELAY_MS: z.coerce.number().default(30_000),
+    /** Idle queue long-poll, in seconds. BullMQ drainDelay default is 5 seconds. */
+    REDIS_DRAIN_DELAY_SEC: z.coerce.number().default(30),
     /** How often to recompute trending without BullMQ repeatables. Default 2h. */
     TRENDING_EVERY_MS: z.coerce.number().default(2 * 60 * 60 * 1000),
   })
@@ -47,7 +47,7 @@ function bullConnection() {
 
 const lightWorkerOpts: Partial<WorkerOptions> = {
   concurrency: 1,
-  drainDelay: env.REDIS_DRAIN_DELAY_MS,
+  drainDelay: env.REDIS_DRAIN_DELAY_SEC,
   stalledInterval: 5 * 60_000,
   skipStalledCheck: true,
   lockDuration: 120_000,
@@ -77,7 +77,9 @@ const probeWorker = new Worker(
       media: { durationCap: number | null };
       downloadUrl: string;
     };
-    const buf = Buffer.from(await (await fetch(data.downloadUrl, { signal: AbortSignal.timeout(20_000) })).arrayBuffer());
+    const buf = Buffer.from(
+      await (await fetch(data.downloadUrl, { signal: AbortSignal.timeout(20_000) })).arrayBuffer(),
+    );
     if (buf.length < 64) {
       await api(`/internal/media/${mediaId}/status`, {
         method: 'POST',
@@ -154,10 +156,12 @@ const transcribeWorker = new Worker(
 // Trending: plain timer — no BullMQ Worker/Queue/repeatable (those were Redis-heavy).
 async function recomputeTrending() {
   try {
-    await fetch(`${env.ALGO_URL}/v1/trending/recompute`, {
+    const res = await fetch(`${env.ALGO_URL}/v1/trending/recompute`, {
       method: 'POST',
       headers: { authorization: `Bearer ${env.ALGO_SERVICE_TOKEN}` },
+      signal: AbortSignal.timeout(120_000),
     });
+    if (!res.ok) console.error('trending recompute failed', res.status);
   } catch (err) {
     console.error('trending recompute failed', err);
   }
@@ -176,5 +180,5 @@ http
 probeWorker.on('failed', (job, err) => console.error('probe failed', job?.id, err));
 transcribeWorker.on('failed', (job, err) => console.error('transcribe failed', job?.id, err));
 console.log(
-  `backend workers on :${env.BACKEND_PORT} (drainDelay=${env.REDIS_DRAIN_DELAY_MS}ms trendingEvery=${env.TRENDING_EVERY_MS}ms)`,
+  `backend workers on :${env.BACKEND_PORT} (drainDelay=${env.REDIS_DRAIN_DELAY_SEC}s trendingEvery=${env.TRENDING_EVERY_MS}ms)`,
 );

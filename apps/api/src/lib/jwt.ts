@@ -20,6 +20,7 @@ export async function signAccess(env: Env, payload: AccessPayload): Promise<stri
 async function verifyWith(secret: string, env: Env, token: string): Promise<AccessPayload | null> {
   try {
     const { payload } = await jwtVerify(token, keyOf(secret), {
+      algorithms: ['HS256'],
       issuer: env.JWT_ISS,
       audience: env.JWT_AUD,
     });

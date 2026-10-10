@@ -1,12 +1,37 @@
 import type { FastifyInstance } from 'fastify';
-import { auditLogs, blocks, follows, mediaObjects, mutes, posts, searchQueries, sessions, users } from '@voiceout/db';
+import {
+  auditLogs,
+  blocks,
+  follows,
+  mediaObjects,
+  mutes,
+  posts,
+  searchQueries,
+  sessions,
+  users,
+} from '@voiceout/db';
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
-import { handleSchema, updateProfileSchema, changePasswordSchema, deleteAccountSchema, linkEmailSchema, confirmEmailSchema, confirmPhoneSchema } from '@voiceout/shared';
+import {
+  handleSchema,
+  updateProfileSchema,
+  changePasswordSchema,
+  deleteAccountSchema,
+  linkEmailSchema,
+  confirmEmailSchema,
+  confirmPhoneSchema,
+  parseCountryCode,
+  placeSchema,
+} from '@voiceout/shared';
 import { requireAuth, requireCsrf } from '../plugins/auth.js';
 import { clampLimit } from '../lib/page.js';
 import { hydratePosts } from '../lib/hydrate.js';
 import { isBlocked, isFollowing, toPublicUser } from '../lib/users.js';
-import { assertAvatarChangeAllowed, assertHandleChangeAllowed, assertPasswordChangeAllowed, toMeUser } from '../lib/cooldown.js';
+import {
+  assertAvatarChangeAllowed,
+  assertHandleChangeAllowed,
+  assertPasswordChangeAllowed,
+  toMeUser,
+} from '../lib/cooldown.js';
 import { notify } from '../lib/notify.js';
 import { writeAudit } from '../lib/audit.js';
 import { sanitizeText } from '../lib/sanitize.js';
@@ -14,8 +39,9 @@ import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { issueSession } from '../lib/session.js';
 import { clearAuthCookies } from '../lib/cookies.js';
 import { cryptographicallyEraseUser, findLiveUserByEmail } from '../lib/erasure.js';
-import { isUniqueViolation } from '../lib/rls.js';
+import { isUniqueViolation, userPublicColumns, withRlsOff } from '../lib/rls.js';
 import { inferGeo } from '../lib/algo.js';
+import { reversePlace } from '../lib/place.js';
 import { sendMail } from '../lib/mail.js';
 import { consumeOtpCode, issueOtpCode } from '../lib/tokens.js';
 import { z } from 'zod';
@@ -24,18 +50,31 @@ export async function userRoutes(app: FastifyInstance) {
   app.get('/users/suggestions', async (req) => {
     const viewer = req.authUser?.id;
     if (!viewer) return { users: [] };
+    const [me] = await app.db
+      .select({ city: users.city, country: users.country })
+      .from(users)
+      .where(eq(users.id, viewer))
+      .limit(1);
+    const city = me?.city?.trim() ?? '';
+    const country = me?.country?.trim() ?? '';
     const rows = await app.db
       .select()
       .from(users)
-      .where(viewer ? and(ne(users.id, viewer), isNull(users.deletedAt)) : isNull(users.deletedAt))
-      .orderBy(desc(users.createdAt))
-      .limit(clampLimit((req.query as { limit?: string }).limit, 12, 20));
+      .where(and(ne(users.id, viewer), isNull(users.deletedAt)))
+      .orderBy(
+        sql`case
+          when ${city} <> '' and ${users.city} = ${city} and ${users.country} = ${country} then 0
+          when ${country} <> '' and ${users.country} = ${country} then 1
+          else 2 end`,
+        desc(users.createdAt),
+      )
+      .limit(clampLimit((req.query as { limit?: string }).limit, 12, 40));
     const filtered = [];
     for (const u of rows) {
-      if (viewer && (await isBlocked(app.db, viewer, u.id))) continue;
-      if (viewer && (await isFollowing(app.db, viewer, u.id))) continue;
+      if (await isBlocked(app.db, viewer, u.id)) continue;
+      if (await isFollowing(app.db, viewer, u.id)) continue;
       filtered.push(await toPublicUser(app.db, app.env, app.s3, u));
-      if (filtered.length >= 6) break;
+      if (filtered.length >= 12) break;
     }
     return { users: filtered };
   });
@@ -83,7 +122,10 @@ export async function userRoutes(app: FastifyInstance) {
       .where(
         and(
           eq(posts.status, 'published'),
-          or(sql`${posts.caption} ilike ${'%' + term + '%'}`, sql`${posts.transcript} ilike ${'%' + term + '%'}`),
+          or(
+            sql`${posts.caption} ilike ${'%' + term + '%'}`,
+            sql`${posts.transcript} ilike ${'%' + term + '%'}`,
+          ),
         ),
       )
       .orderBy(desc(posts.createdAt))
@@ -123,9 +165,14 @@ export async function userRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const body = updateProfileSchema.parse(req.body);
-    const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+    const [current] = await app.db
+      .select()
+      .from(users)
+      .where(eq(users.id, req.authUser!.id))
+      .limit(1);
     if (!current) return reply.code(404).send({ error: 'Not found' });
-    const nextName = body.displayName !== undefined ? sanitizeText(body.displayName) : current.displayName;
+    const nextName =
+      body.displayName !== undefined ? sanitizeText(body.displayName) : current.displayName;
     const nextHandle = body.handle ?? current.handle;
     const handleChanging = nextHandle !== current.handle;
     const nameChanging = nextName !== current.displayName;
@@ -153,7 +200,9 @@ export async function userRoutes(app: FastifyInstance) {
       const otp = await consumeOtpCode(app.redis, 'vo:name', current.id, body.verificationCode);
       if (!otp) return reply.code(400).send({ error: 'Invalid or expired code' });
       if (otp.handle && otp.handle !== nextHandle) {
-        return reply.code(400).send({ error: 'Code does not match this username change. Request a new code.' });
+        return reply
+          .code(400)
+          .send({ error: 'Code does not match this username change. Request a new code.' });
       }
     }
     if (body.handle && body.handle !== current.handle) {
@@ -166,29 +215,45 @@ export async function userRoutes(app: FastifyInstance) {
     }
     const nextBio = body.bio !== undefined ? sanitizeText(body.bio) : current.bio;
     const geo = body.bio !== undefined ? await inferGeo(app.env, nextBio ?? '', req.id) : null;
-    const geoPatch =
+    const nextCity =
+      body.city !== undefined ? sanitizeText(body.city).slice(0, 80) || null : undefined;
+    const nextCountry =
+      body.country === undefined || !body.country.trim()
+        ? undefined
+        : parseCountryCode(body.country);
+    if (body.country !== undefined && body.country.trim() && nextCountry === null) {
+      return reply.code(400).send({ error: 'Unknown country' });
+    }
+    const geoPatch: { lang?: string | null; region?: string | null } =
       body.bio !== undefined
         ? !(nextBio ?? '').trim()
-          ? { lang: null, region: null }
+          ? { lang: null, region: current.country ?? null }
           : {
               ...(geo?.lang ? { lang: geo.lang } : {}),
               ...(geo?.region ? { region: geo.region } : {}),
             }
         : {};
+    if (nextCountry !== undefined) {
+      geoPatch.region = nextCountry ?? current.region ?? null;
+    }
     let user: typeof users.$inferSelect;
     try {
-      const [updated] = await app.db
-        .update(users)
-        .set({
-          ...(body.displayName !== undefined ? { displayName: nextName } : {}),
-          ...(body.bio !== undefined ? { bio: nextBio } : {}),
-          ...(body.handle ? { handle: body.handle } : {}),
-          ...geoPatch,
-          ...(handleChanging ? { profileNameChangedAt: new Date() } : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, req.authUser!.id))
-        .returning();
+      const [updated] = await app.db.transaction((tx) =>
+        tx
+          .update(users)
+          .set({
+            ...(body.displayName !== undefined ? { displayName: nextName } : {}),
+            ...(body.bio !== undefined ? { bio: nextBio } : {}),
+            ...(body.handle ? { handle: body.handle } : {}),
+            ...(nextCity !== undefined ? { city: nextCity } : {}),
+            ...(nextCountry !== undefined ? { country: nextCountry } : {}),
+            ...geoPatch,
+            ...(handleChanging ? { profileNameChangedAt: new Date() } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, req.authUser!.id))
+          .returning(),
+      );
       if (!updated) return reply.code(404).send({ error: 'Not found' });
       user = updated;
     } catch (err) {
@@ -198,10 +263,41 @@ export async function userRoutes(app: FastifyInstance) {
     await writeAudit(
       app.db,
       req,
-      handleChanging ? 'profile_handle_change' : nameChanging ? 'profile_display_name_change' : 'profile_update',
+      handleChanging
+        ? 'profile_handle_change'
+        : nameChanging
+          ? 'profile_display_name_change'
+          : 'profile_update',
     );
     return { user: await toMeUser(app.db, app.env, app.s3, user) };
   });
+
+  app.post(
+    '/users/me/place',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireAuth(req, reply);
+      requireCsrf(req);
+      const body = placeSchema.parse(req.body);
+      const place = await reversePlace(body.lat, body.lng);
+      if (!place)
+        return reply
+          .code(400)
+          .send({ error: 'Could not read that location. Type your city instead.' });
+      const [updated] = await app.db
+        .update(users)
+        .set({
+          city: place.city || null,
+          country: place.country || null,
+          region: place.country || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, req.authUser!.id))
+        .returning();
+      if (!updated) return reply.code(404).send({ error: 'Not found' });
+      return { user: await toMeUser(app.db, app.env, app.s3, updated) };
+    },
+  );
 
   app.post(
     '/users/me/name-code',
@@ -215,7 +311,11 @@ export async function userRoutes(app: FastifyInstance) {
           handle: handleSchema.optional(),
         })
         .parse(req.body);
-      const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      const [current] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
       if (!current) return reply.code(404).send({ error: 'Not found' });
       assertHandleChangeAllowed(current);
       if (current.email.endsWith('@users.invalid')) {
@@ -257,7 +357,11 @@ export async function userRoutes(app: FastifyInstance) {
       requireAuth(req, reply);
       requireCsrf(req);
       const body = linkEmailSchema.parse(req.body);
-      const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      const [current] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
       if (!current) return reply.code(404).send({ error: 'Not found' });
       if (!current.email.endsWith('@users.invalid') && current.emailVerifiedAt) {
         return reply.code(400).send({ error: 'This account already has a verified email' });
@@ -269,7 +373,9 @@ export async function userRoutes(app: FastifyInstance) {
           code: 'EMAIL_IN_USE',
         });
       }
-      const code = await issueOtpCode(app.redis, 'vo:email-link', current.id, { email: body.email });
+      const code = await issueOtpCode(app.redis, 'vo:email-link', current.id, {
+        email: body.email,
+      });
       await sendMail(app.env, req.log, {
         to: body.email,
         kind: 'email_link_code',
@@ -349,11 +455,16 @@ export async function userRoutes(app: FastifyInstance) {
       requireAuth(req, reply);
       requireCsrf(req);
       const body = changePasswordSchema.parse(req.body);
-      const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      const [user] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
       if (!user) return reply.code(404).send({ error: 'Not found' });
       assertPasswordChangeAllowed(user);
       if (user.passwordHash) {
-        if (!body.currentPassword) return reply.code(400).send({ error: 'Current password required' });
+        if (!body.currentPassword)
+          return reply.code(400).send({ error: 'Current password required' });
         const ok = await verifyPassword(user.passwordHash, body.currentPassword);
         if (!ok) return reply.code(401).send({ error: 'Current password is wrong' });
         const same = await verifyPassword(user.passwordHash, body.newPassword);
@@ -372,8 +483,11 @@ export async function userRoutes(app: FastifyInstance) {
             updatedAt: new Date(),
           })
           .where(eq(users.id, user.id));
+        await tx.execute(sql`select set_config('app.allow_password', '', true)`);
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
-        await tx.insert(auditLogs).values({ userId: user.id, action: 'password_change', ip: req.ip });
+        await tx
+          .insert(auditLogs)
+          .values({ userId: user.id, action: 'password_change', ip: req.ip });
       });
       await issueSession(app.db, app.env, reply, user.id, {
         userAgent: req.headers['user-agent'],
@@ -401,7 +515,11 @@ export async function userRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const body = z.object({ mediaId: z.string().uuid() }).parse(req.body);
-    const [current] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+    const [current] = await app.db
+      .select()
+      .from(users)
+      .where(eq(users.id, req.authUser!.id))
+      .limit(1);
     if (!current) return reply.code(404).send({ error: 'Not found' });
     assertAvatarChangeAllowed(current);
     const [media] = await app.db
@@ -409,7 +527,8 @@ export async function userRoutes(app: FastifyInstance) {
       .from(mediaObjects)
       .where(and(eq(mediaObjects.id, body.mediaId), eq(mediaObjects.userId, req.authUser!.id)))
       .limit(1);
-    if (!media || media.kind !== 'avatar' || media.status !== 'ready') return reply.code(400).send({ error: 'Invalid photo' });
+    if (!media || media.kind !== 'avatar' || media.status !== 'ready')
+      return reply.code(400).send({ error: 'Invalid photo' });
     const [user] = await app.db
       .update(users)
       .set({ avatarMediaId: body.mediaId, avatarChangedAt: new Date(), updatedAt: new Date() })
@@ -462,7 +581,7 @@ export async function userRoutes(app: FastifyInstance) {
   app.get('/users/:handle/posts', async (req, reply) => {
     const { handle } = z.object({ handle: handleSchema }).parse(req.params);
     const [user] = await app.db
-      .select()
+      .select({ id: users.id })
       .from(users)
       .where(and(eq(users.handle, handle), isNull(users.deletedAt)))
       .limit(1);
@@ -484,7 +603,8 @@ export async function userRoutes(app: FastifyInstance) {
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     if (id === req.authUser!.id) return reply.code(400).send({ error: 'Cannot follow yourself' });
-    if (await isBlocked(app.db, req.authUser!.id, id)) return reply.code(403).send({ error: 'Blocked' });
+    if (await isBlocked(app.db, req.authUser!.id, id))
+      return reply.code(403).send({ error: 'Blocked' });
     const [target] = await app.db
       .select({ id: users.id })
       .from(users)
@@ -497,8 +617,12 @@ export async function userRoutes(app: FastifyInstance) {
       .where(and(eq(follows.followerId, req.authUser!.id), eq(follows.followeeId, id)))
       .limit(1);
     if (existing) return { ok: true, following: true, notifyPosts: existing.notifyPosts };
-    await app.db.insert(follows).values({ followerId: req.authUser!.id, followeeId: id, notifyPosts: false });
-    await notify(app.db, { userId: id, actorId: req.authUser!.id, type: 'follow' });
+    const [inserted] = await app.db
+      .insert(follows)
+      .values({ followerId: req.authUser!.id, followeeId: id, notifyPosts: false })
+      .onConflictDoNothing()
+      .returning({ followerId: follows.followerId });
+    if (inserted) await notify(app.db, { userId: id, actorId: req.authUser!.id, type: 'follow' });
     return { ok: true, following: true, notifyPosts: false };
   });
 
@@ -531,13 +655,21 @@ export async function userRoutes(app: FastifyInstance) {
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     if (id === req.authUser!.id) return reply.code(400).send({ error: 'Cannot block yourself' });
-    await app.db.delete(follows).where(
-      or(
-        and(eq(follows.followerId, req.authUser!.id), eq(follows.followeeId, id)),
-        and(eq(follows.followerId, id), eq(follows.followeeId, req.authUser!.id)),
-      ),
+    // Also drops their follow of you, which is their row under RLS.
+    await withRlsOff(app.db, () =>
+      app.db
+        .delete(follows)
+        .where(
+          or(
+            and(eq(follows.followerId, req.authUser!.id), eq(follows.followeeId, id)),
+            and(eq(follows.followerId, id), eq(follows.followeeId, req.authUser!.id)),
+          ),
+        ),
     );
-    await app.db.insert(blocks).values({ blockerId: req.authUser!.id, blockedId: id }).onConflictDoNothing();
+    await app.db
+      .insert(blocks)
+      .values({ blockerId: req.authUser!.id, blockedId: id })
+      .onConflictDoNothing();
     return { ok: true };
   });
 
@@ -555,7 +687,10 @@ export async function userRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    await app.db.insert(mutes).values({ muterId: req.authUser!.id, mutedId: id }).onConflictDoNothing();
+    await app.db
+      .insert(mutes)
+      .values({ muterId: req.authUser!.id, mutedId: id })
+      .onConflictDoNothing();
     return { ok: true };
   });
 
@@ -563,7 +698,9 @@ export async function userRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     requireCsrf(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    await app.db.delete(mutes).where(and(eq(mutes.muterId, req.authUser!.id), eq(mutes.mutedId, id)));
+    await app.db
+      .delete(mutes)
+      .where(and(eq(mutes.muterId, req.authUser!.id), eq(mutes.mutedId, id)));
     return { ok: true };
   });
 
@@ -572,7 +709,11 @@ export async function userRoutes(app: FastifyInstance) {
     const rows = await app.db.select().from(blocks).where(eq(blocks.blockerId, req.authUser!.id));
     const out = [];
     for (const row of rows) {
-      const [u] = await app.db.select().from(users).where(eq(users.id, row.blockedId)).limit(1);
+      const [u] = await app.db
+        .select(userPublicColumns)
+        .from(users)
+        .where(eq(users.id, row.blockedId))
+        .limit(1);
       if (u) out.push(await toPublicUser(app.db, app.env, app.s3, u));
     }
     return { users: out };
@@ -583,7 +724,11 @@ export async function userRoutes(app: FastifyInstance) {
     const rows = await app.db.select().from(mutes).where(eq(mutes.muterId, req.authUser!.id));
     const out = [];
     for (const row of rows) {
-      const [u] = await app.db.select().from(users).where(eq(users.id, row.mutedId)).limit(1);
+      const [u] = await app.db
+        .select(userPublicColumns)
+        .from(users)
+        .where(eq(users.id, row.mutedId))
+        .limit(1);
       if (u) out.push(await toPublicUser(app.db, app.env, app.s3, u));
     }
     return { users: out };
@@ -614,7 +759,12 @@ async function recordSearchQuery(
       .orderBy(desc(searchQueries.createdAt))
       .offset(200);
     if (overflow.length) {
-      await tx.delete(searchQueries).where(inArray(searchQueries.id, overflow.map((row) => row.id)));
+      await tx.delete(searchQueries).where(
+        inArray(
+          searchQueries.id,
+          overflow.map((row) => row.id),
+        ),
+      );
     }
   });
 }

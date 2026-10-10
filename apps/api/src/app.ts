@@ -7,10 +7,11 @@ import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import { HttpError } from './lib/http.js';
 import type { Env } from './env.js';
-import type { Db } from '@voiceout/db';
+import type { Db, SqlClient } from '@voiceout/db';
 import type { Redis } from 'ioredis';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { Queues } from './lib/queue.js';
+import { beginRequestTx, enterRequestTx, finishRequestTx } from './lib/requestDb.js';
 import { authPlugin } from './plugins/auth.js';
 import { authRoutes } from './routes/auth.js';
 import { billingRoutes } from './routes/billing.js';
@@ -27,6 +28,7 @@ import './types.js';
 export async function buildApp(opts: {
   env: Env;
   db: Db;
+  sql: SqlClient;
   redis: Redis;
   s3: S3Client;
   queues: Queues;
@@ -40,19 +42,40 @@ export async function buildApp(opts: {
     keepAliveTimeout: 15_000,
     genReqId: (req) => {
       const incoming = req.headers['x-request-id'];
-      if (typeof incoming === 'string' && incoming.length >= 8 && incoming.length <= 80) return incoming;
+      if (typeof incoming === 'string' && incoming.length >= 8 && incoming.length <= 80)
+        return incoming;
       return randomUUID();
     },
   });
 
   app.decorate('env', opts.env);
   app.decorate('db', opts.db);
+  app.decorate('sql', opts.sql);
   app.decorate('redis', opts.redis);
   app.decorate('s3', opts.s3);
   app.decorate('queues', opts.queues);
 
   app.addHook('onRequest', async (req, reply) => {
     reply.header('x-request-id', req.id);
+  });
+  // One transaction per request so RLS settings (set_config ..., true) cover every statement.
+  app.addHook('preValidation', (req, _reply, done) => {
+    const path = (req.url.split('?')[0] ?? '').replace(/\/$/, '') || '/';
+    if (req.method === 'OPTIONS' || path === '/health' || path === '/auth/csrf') return done();
+    beginRequestTx(opts.sql).then(
+      (tx) => {
+        req.voTx = tx;
+        enterRequestTx(tx, done);
+      },
+      (err: Error) => done(err),
+    );
+  });
+  app.addHook('onSend', async (req, reply, payload) => {
+    await finishRequestTx(req.voTx, reply.statusCode < 500);
+    return payload;
+  });
+  app.addHook('onResponse', async (req) => {
+    await finishRequestTx(req.voTx, false);
   });
 
   await app.register(helmet, {
@@ -66,7 +89,9 @@ export async function buildApp(opts: {
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   });
   await app.register(cors, {
-    origin: [...new Set([opts.env.WEB_ORIGIN, opts.env.PUBLIC_ORIGIN].filter((o) => o.startsWith('http')))],
+    origin: [
+      ...new Set([opts.env.WEB_ORIGIN, opts.env.PUBLIC_ORIGIN].filter((o) => o.startsWith('http'))),
+    ],
     credentials: true,
     allowedHeaders: [
       'content-type',

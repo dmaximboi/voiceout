@@ -3,7 +3,13 @@ import { blocks, bookmarks, comments, feedFeedback, follows, listenEvents, mutes
 import { and, desc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { fetchTrendingIds, rankFeedOrLocal, type RankCandidate } from '../lib/algo.js';
 import { hydratePosts } from '../lib/hydrate.js';
-import { feedEventsSchema, feedFeedbackSchema, listenSchema } from '@voiceout/shared';
+import {
+  classifyCaptionShelf,
+  feedEventsSchema,
+  feedFeedbackSchema,
+  listenSchema,
+  parseContentShelf,
+} from '@voiceout/shared';
 import { requireAuth, requireCsrf } from '../plugins/auth.js';
 import { z } from 'zod';
 
@@ -12,6 +18,7 @@ export async function feedRoutes(app: FastifyInstance) {
     const viewer = req.authUser?.id ?? null;
     const limit = 40;
     const fast = String((req.query as { fast?: string }).fast ?? '') === '1';
+    const shelf = parseContentShelf(String((req.query as { shelf?: string }).shelf ?? ''));
     if (!viewer) {
       const recent = await app.db
         .select()
@@ -20,13 +27,11 @@ export async function feedRoutes(app: FastifyInstance) {
         .orderBy(desc(posts.createdAt))
         .limit(80);
       const selected = diversifyGuestPosts(recent, limit);
-      return {
-        posts: (await hydratePosts(app.db, app.env, app.s3, selected, null)).map((post) => ({
-          ...post,
-          rankReasons: [],
-        })),
-        mode: 'guest',
-      };
+      const cards = (await hydratePosts(app.db, app.env, app.s3, selected, null)).map((post) => ({
+        ...post,
+        rankReasons: [],
+      }));
+      return { posts: shelf ? cards.filter((post) => post.shelf === shelf) : cards, mode: 'guest' };
     }
 
     if (fast) {
@@ -44,13 +49,11 @@ export async function feedRoutes(app: FastifyInstance) {
         )
         .orderBy(desc(posts.createdAt))
         .limit(limit);
-      return {
-        posts: (await hydratePosts(app.db, app.env, app.s3, recent, viewer)).map((post) => ({
-          ...post,
-          rankReasons: [],
-        })),
-        mode: 'fast',
-      };
+      const cards = (await hydratePosts(app.db, app.env, app.s3, recent, viewer)).map((post) => ({
+        ...post,
+        rankReasons: [],
+      }));
+      return { posts: shelf ? cards.filter((post) => post.shelf === shelf) : cards, mode: 'fast' };
     }
 
     const [blocked, muted, feedbackRows, seenRows] = await Promise.all([
@@ -68,7 +71,7 @@ export async function feedRoutes(app: FastifyInstance) {
       .filter((row) => row.kind === 'hide_author')
       .map((row) => row.authorId);
     const excludeAuthors = [...new Set([...blocked, ...muted, ...hiddenAuthors])];
-    const excludedPosts = new Set(
+    const hiddenPosts = new Set(
       feedbackRows.filter((row) => row.kind === 'not_interested').map((row) => row.postId),
     );
 
@@ -117,11 +120,13 @@ export async function feedRoutes(app: FastifyInstance) {
     tag(followerIds, 'follower');
 
     const candidates: RankCandidate[] = [];
-    const seen = new Set<string>([...seenRows.map((row) => row.postId), ...excludedPosts]);
+    const picked = new Set<string>();
+    const seenCountsHint = new Map(seenRows.map((row) => [row.postId, 1] as const));
 
     function push(p: typeof posts.$inferSelect, source: RankCandidate['source'], extra = 0) {
-      if (seen.has(p.id) || excludeAuthors.includes(p.authorId)) return;
-      seen.add(p.id);
+      if (picked.has(p.id) || hiddenPosts.has(p.id) || excludeAuthors.includes(p.authorId)) return;
+      if (shelf && (parseContentShelf(p.shelf) ?? classifyCaptionShelf(p.caption)) !== shelf) return;
+      picked.add(p.id);
       candidates.push({
         post_id: p.id,
         author_id: p.authorId,
@@ -176,20 +181,31 @@ export async function feedRoutes(app: FastifyInstance) {
     const viewerEmotion = reactionEmotion && reactionEmotion !== 'neutral' ? lastReact : ownEmotion;
 
     await pullMatched(app, {
-      seen,
+      picked,
+      hiddenPosts,
       candidates,
       excludeAuthors,
       lang: viewerLang,
       region: viewerRegion,
       emotions: matchEmotions,
+      shelf,
+    });
+    await pullSamePlace(app, {
+      picked,
+      hiddenPosts,
+      candidates,
+      excludeAuthors,
+      city: viewerHints.city,
+      country: viewerHints.country,
+      shelf,
     });
 
     const candidateIds = candidates.map((candidate) => candidate.post_id);
     const [recentCaptions, recentSearches, replay, completes, personal] = await Promise.all([
       recentEngagedCaptions(app, viewer),
       recentSearchTexts(app, viewer),
-      replayCounts(app, viewer, [...seen]),
-      personalCompletes(app, viewer, [...seen]),
+      replayCounts(app, viewer, candidateIds),
+      personalCompletes(app, viewer, candidateIds),
       personalizationSignals(app, viewer, candidateIds),
     ]);
     const shareSet = new Set(shareAuthorIds);
@@ -208,7 +224,7 @@ export async function feedRoutes(app: FastifyInstance) {
       c.voice_affinity = personal.voiced.has(c.post_id) ? 1 : 0;
       c.category_affinity = personal.categories.get(c.category ?? '') ?? 0;
       c.novelty = c.author_familiarity > 0 ? 0.25 : 1;
-      c.seen_count = personal.seenCounts.get(c.post_id) ?? 0;
+      c.seen_count = personal.seenCounts.get(c.post_id) ?? seenCountsHint.get(c.post_id) ?? 0;
     }
     const exploreIds = deterministicExploreIds(candidates);
     for (const candidate of candidates) candidate.explore = exploreIds.has(candidate.post_id);
@@ -228,9 +244,18 @@ export async function feedRoutes(app: FastifyInstance) {
     }, req.id);
 
     let order = injectExploration(ranked.postIds, exploreIds);
-    // Never wipe a populated candidate pool if the ranker returns nothing.
     if (order.length === 0 && candidates.length > 0) {
       order = candidates.map((c) => c.post_id);
+    }
+    order = injectFollowerBest(
+      order,
+      candidates.filter((c) => followerIds.includes(c.author_id)).map((c) => c.post_id),
+    );
+    if (order.length < 12) {
+      for (const candidate of candidates) {
+        if (!order.includes(candidate.post_id)) order.push(candidate.post_id);
+        if (order.length >= limit) break;
+      }
     }
     const idList = order.slice(0, limit);
     if (idList.length === 0) return { posts: [], mode: 'personalized' };
@@ -410,6 +435,19 @@ export async function feedRoutes(app: FastifyInstance) {
     const ordered = ids.map((id) => map.get(id)).filter(Boolean) as typeof rows;
     return { posts: await hydratePosts(app.db, app.env, app.s3, ordered, req.authUser?.id ?? null) };
   });
+}
+
+export function injectFollowerBest(ranked: string[], followerPostIds: string[], ratio = 0.12) {
+  if (followerPostIds.length === 0 || ranked.length === 0) return ranked;
+  const want = Math.max(1, Math.round(Math.min(ranked.length, 40) * ratio));
+  const unique = [...new Set(followerPostIds)];
+  const picked = unique.filter((id) => ranked.includes(id)).slice(0, want);
+  if (picked.length === 0) return ranked;
+  const base = ranked.filter((id) => !picked.includes(id));
+  for (let index = 0; index < picked.length; index += 1) {
+    base.splice(Math.min(3 + index * 7, base.length), 0, picked[index]!);
+  }
+  return base;
 }
 
 export function diversifyGuestPosts<T extends { authorId: string }>(rows: T[], limit: number): T[] {
@@ -600,11 +638,16 @@ const REACTION_TO_SENTIMENT: Record<string, string> = {
 
 async function viewerGeoHints(app: FastifyInstance, viewer: string) {
   const [row] = await app.db
-    .select({ lang: users.lang, region: users.region })
+    .select({ lang: users.lang, region: users.region, country: users.country, city: users.city })
     .from(users)
     .where(eq(users.id, viewer))
     .limit(1);
-  return { lang: row?.lang?.trim() ?? '', region: row?.region?.trim() ?? '' };
+  return {
+    lang: row?.lang?.trim() ?? '',
+    region: row?.region?.trim() || row?.country?.trim() || '',
+    city: row?.city?.trim() ?? '',
+    country: row?.country?.trim() ?? '',
+  };
 }
 
 async function bookmarkedAuthorIds(app: FastifyInstance, viewer: string) {
@@ -735,15 +778,71 @@ function injectExploration(ranked: string[], exploreIds: Set<string>) {
   return base;
 }
 
+async function pullSamePlace(
+  app: FastifyInstance,
+  opts: {
+    picked: Set<string>;
+    hiddenPosts: Set<string>;
+    candidates: RankCandidate[];
+    excludeAuthors: string[];
+    city: string;
+    country: string;
+    shelf: ReturnType<typeof parseContentShelf>;
+  },
+) {
+  if (!opts.city && !opts.country) return;
+  const placeAuthors = await app.db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        opts.city && opts.country
+          ? and(eq(users.city, opts.city), eq(users.country, opts.country))
+          : opts.country
+            ? eq(users.country, opts.country)
+            : eq(users.city, opts.city),
+      ),
+    )
+    .limit(40);
+  const authorIds = placeAuthors.map((row) => row.id).filter((id) => !opts.excludeAuthors.includes(id));
+  if (!authorIds.length) return;
+  const rows = await app.db
+    .select()
+    .from(posts)
+    .where(and(eq(posts.status, 'published'), inArray(posts.authorId, authorIds)))
+    .orderBy(desc(posts.createdAt))
+    .limit(24);
+  for (const p of rows) {
+    if (opts.picked.has(p.id) || opts.hiddenPosts.has(p.id) || opts.excludeAuthors.includes(p.authorId)) continue;
+    if (opts.shelf && (parseContentShelf(p.shelf) ?? classifyCaptionShelf(p.caption)) !== opts.shelf) continue;
+    opts.picked.add(p.id);
+    opts.candidates.push({
+      post_id: p.id,
+      author_id: p.authorId,
+      caption: p.caption,
+      transcript: p.transcript ?? '',
+      duration_ms: p.durationMs,
+      created_at: p.createdAt.toISOString(),
+      source: 'region_match',
+      comment_boost: 0,
+      lang: p.lang ?? '',
+      emotion: p.commentEmotion ?? '',
+      region: p.region ?? '',
+    });
+  }
+}
+
 async function pullMatched(
   app: FastifyInstance,
   opts: {
-    seen: Set<string>;
+    picked: Set<string>;
+    hiddenPosts: Set<string>;
     candidates: RankCandidate[];
     excludeAuthors: string[];
     lang: string;
     region: string;
     emotions: string[];
+    shelf: ReturnType<typeof parseContentShelf>;
   },
 ) {
   const matchers = [
@@ -759,8 +858,9 @@ async function pullMatched(
     .orderBy(desc(posts.createdAt))
     .limit(40);
   for (const p of rows) {
-    if (opts.seen.has(p.id) || opts.excludeAuthors.includes(p.authorId)) continue;
-    opts.seen.add(p.id);
+    if (opts.picked.has(p.id) || opts.hiddenPosts.has(p.id) || opts.excludeAuthors.includes(p.authorId)) continue;
+    if (opts.shelf && (parseContentShelf(p.shelf) ?? classifyCaptionShelf(p.caption)) !== opts.shelf) continue;
+    opts.picked.add(p.id);
     const source: RankCandidate['source'] =
       opts.lang && p.lang === opts.lang
         ? 'lang_match'

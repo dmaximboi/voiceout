@@ -44,6 +44,7 @@ export async function sendMail(
     return { sent: false as const };
   }
   const res = await fetch('https://api.resend.com/emails', {
+    signal: AbortSignal.timeout(10_000),
     method: 'POST',
     headers: {
       authorization: `Bearer ${env.RESEND_API_KEY}`,
@@ -56,7 +57,11 @@ export async function sendMail(
       text,
       ...(html ? { html } : {}),
     }),
+  }).catch((err: unknown) => {
+    log.error({ err }, 'resend unreachable');
+    return null;
   });
+  if (!res) return { sent: false as const };
   if (!res.ok) {
     log.error({ status: res.status, body: await res.text() }, 'resend failed');
     return { sent: false as const };

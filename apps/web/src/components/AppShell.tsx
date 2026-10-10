@@ -278,8 +278,8 @@ function WhoToFollow() {
       return;
     }
     void import('@/lib/api').then(({ api }) =>
-      api<{ users: SuggestUser[] }>('/users/suggestions')
-        .then((d) => setUsers(d.users))
+      api<{ users: SuggestUser[] }>('/users/suggestions?limit=6')
+        .then((d) => setUsers(d.users.slice(0, 6)))
         .catch(() => setUsers([])),
     );
   }, [user]);

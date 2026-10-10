@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env'), override: true });
 config();
 
-import { createDb } from '@voiceout/db';
+import { createSql, dbFromClient } from '@voiceout/db';
+import { attachRequestDb } from './lib/requestDb.js';
 import { Redis } from 'ioredis';
 import { loadEnv } from './env.js';
 import { buildApp } from './app.js';
@@ -17,7 +18,8 @@ const env = loadEnv();
 if (process.env.FLY_APP_NAME) {
   env.API_PORT = 4000;
 }
-const db = createDb(env.DATABASE_URL);
+const sql = createSql(env.DATABASE_URL);
+const db = attachRequestDb(dbFromClient(sql));
 const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: 2,
   connectTimeout: 3000,
@@ -29,5 +31,5 @@ const redis = new Redis(env.REDIS_URL, {
 const s3 = createS3(env);
 const queues = createQueues(env.REDIS_URL);
 
-const app = await buildApp({ env, db, redis, s3, queues });
+const app = await buildApp({ env, db, sql, redis, s3, queues });
 await app.listen({ port: env.API_PORT, host: '0.0.0.0' });

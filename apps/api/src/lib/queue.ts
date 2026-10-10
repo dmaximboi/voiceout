@@ -19,9 +19,8 @@ export function redisBaseOpts(extra?: { maxRetriesPerRequest: number | null }) {
 export const defaultJobOpts: JobsOptions = {
   attempts: 3,
   backoff: { type: 'exponential', delay: 5000 },
-  // Tiny history — completed/failed job keys still count as Redis commands/keys.
-  removeOnComplete: 10,
-  removeOnFail: 30,
+  removeOnComplete: { count: 10, age: 3600 },
+  removeOnFail: { count: 30, age: 86_400 },
 };
 
 export function createQueues(redisUrl: string) {

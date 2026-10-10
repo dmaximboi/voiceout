@@ -10,13 +10,19 @@ import {
   type Db,
 } from '@voiceout/db';
 import type { PostCard, PostReaction } from '@voiceout/shared';
-import { POST_REACTIONS } from '@voiceout/shared';
+import {
+  classifyCaptionShelf,
+  classifyCaptionTopic,
+  parseContentShelf,
+  parseContentTopic,
+  POST_REACTIONS,
+} from '@voiceout/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { Env } from '../env.js';
 import { publicMediaUrl } from './s3.js';
-import { userDirectoryColumns } from './rls.js';
-import { toPublicUser } from './users.js';
+import { userDirectoryColumns, withRlsOff } from './rls.js';
+import { toPublicUsers } from './users.js';
 
 export async function hydratePosts(
   db: Db,
@@ -70,12 +76,16 @@ export async function hydratePosts(
   const myMap = new Map(myReactions.map((r) => [r.postId, r.type]));
   const commentMap = new Map(commentCountRows.map((c) => [c.postId, c.n]));
 
-  const [bookmarkCounts, repostCounts, voiceCounts, myBookmarks, myReposts, myVoices] = await Promise.all([
+  // Bookmarks are private rows; only the per-post total is shown. Kept out of Promise.all
+  // because the RLS toggle applies to the whole connection.
+  const bookmarkCounts = await withRlsOff(db, () =>
     db
       .select({ postId: bookmarks.postId, n: sql<number>`count(*)::int` })
       .from(bookmarks)
       .where(inArray(bookmarks.postId, ids))
       .groupBy(bookmarks.postId),
+  );
+  const [repostCounts, voiceCounts, myBookmarks, myReposts, myVoices] = await Promise.all([
     db
       .select({ postId: reposts.postId, n: sql<number>`count(*)::int` })
       .from(reposts)
@@ -87,13 +97,22 @@ export async function hydratePosts(
       .where(inArray(voices.postId, ids))
       .groupBy(voices.postId),
     viewerId
-      ? db.select({ postId: bookmarks.postId }).from(bookmarks).where(and(inArray(bookmarks.postId, ids), eq(bookmarks.userId, viewerId)))
+      ? db
+          .select({ postId: bookmarks.postId })
+          .from(bookmarks)
+          .where(and(inArray(bookmarks.postId, ids), eq(bookmarks.userId, viewerId)))
       : Promise.resolve([] as { postId: string }[]),
     viewerId
-      ? db.select({ postId: reposts.postId }).from(reposts).where(and(inArray(reposts.postId, ids), eq(reposts.userId, viewerId)))
+      ? db
+          .select({ postId: reposts.postId })
+          .from(reposts)
+          .where(and(inArray(reposts.postId, ids), eq(reposts.userId, viewerId)))
       : Promise.resolve([] as { postId: string }[]),
     viewerId
-      ? db.select({ postId: voices.postId }).from(voices).where(and(inArray(voices.postId, ids), eq(voices.userId, viewerId)))
+      ? db
+          .select({ postId: voices.postId })
+          .from(voices)
+          .where(and(inArray(voices.postId, ids), eq(voices.userId, viewerId)))
       : Promise.resolve([] as { postId: string }[]),
   ]);
   const bookmarkMap = new Map(bookmarkCounts.map((r) => [r.postId, r.n]));
@@ -115,9 +134,11 @@ export async function hydratePosts(
     if (rec) rec[row.type as PostReaction] = row.n;
   }
 
+  const publicAuthors = await toPublicUsers(db, env, s3, authorRows);
+
   const cards: PostCard[] = [];
   for (const p of postRows) {
-    const author = authorMap.get(p.authorId);
+    const author = publicAuthors.get(p.authorId);
     if (!author) continue;
     const media = mediaMap.get(p.mediaId);
     const audioUrl = media && media.status === 'ready' ? publicMediaUrl(media.id) : null;
@@ -130,7 +151,7 @@ export async function hydratePosts(
     cards.push({
       id: p.id,
       shareCode: p.shareCode,
-      author: await toPublicUser(db, env, s3, author),
+      author,
       caption: p.caption,
       durationMs: p.durationMs,
       durationCap: p.durationCap as PostCard['durationCap'],
@@ -150,6 +171,8 @@ export async function hydratePosts(
       status: p.status,
       categories: p.commentCategories ?? {},
       rankReasons: [],
+      shelf: parseContentShelf(p.shelf) ?? classifyCaptionShelf(p.caption),
+      topic: parseContentTopic(p.topic) ?? classifyCaptionTopic(p.caption),
     });
   }
   return cards;

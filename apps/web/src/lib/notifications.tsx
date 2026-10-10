@@ -62,15 +62,23 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       return;
     }
     void refresh().catch(() => undefined);
-    // Logged-in only. Postgres unread check — not Redis. 30s is enough for Drops badge.
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 30_000);
-    const onFocus = () => void refresh().catch(() => undefined);
-    window.addEventListener('focus', onFocus);
-    window.addEventListener(REFRESH_EVENT, onFocus);
+    const focusGapMs = 3 * 60 * 1000;
+    let lastFocusRefresh = Date.now();
+    const onExplicit = () => void refresh().catch(() => undefined);
+    const onFocusRefresh = () => {
+      if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastFocusRefresh < focusGapMs) return;
+      lastFocusRefresh = now;
+      void refresh().catch(() => undefined);
+    };
+    window.addEventListener('focus', onFocusRefresh);
+    document.addEventListener('visibilitychange', onFocusRefresh);
+    window.addEventListener(REFRESH_EVENT, onExplicit);
     return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener(REFRESH_EVENT, onFocus);
+      window.removeEventListener('focus', onFocusRefresh);
+      document.removeEventListener('visibilitychange', onFocusRefresh);
+      window.removeEventListener(REFRESH_EVENT, onExplicit);
     };
   }, [refresh, user]);
 

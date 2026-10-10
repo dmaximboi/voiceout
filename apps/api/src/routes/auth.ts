@@ -1,21 +1,54 @@
 import type { FastifyInstance } from 'fastify';
 import { oauthAccounts, sessions, users, deviceLinks } from '@voiceout/db';
 import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
-import { loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '@voiceout/shared';
-import { hashPassword, randomToken, sha256, verifyPassword } from '../lib/crypto.js';
+import {
+  loginSchema,
+  registerSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  verifyEmailSchema,
+} from '@voiceout/shared';
+import {
+  hashPassword,
+  randomToken,
+  sha256,
+  verifyPassword,
+  verifyPasswordOrDummy,
+} from '../lib/crypto.js';
 import { sendMail } from '../lib/mail.js';
 import { consumeRedisToken, issueRedisToken, issueOtpCode, consumeOtpCode } from '../lib/tokens.js';
-import { clearAuthCookies, readCookies, setAuthCookies, setCsrfCookie, setDeviceCookie } from '../lib/cookies.js';
-import { createSession, issueHandoff, issueSession } from '../lib/session.js';
+import {
+  clearAuthCookies,
+  readCookies,
+  setAuthCookies,
+  setCsrfCookie,
+  setDeviceCookie,
+} from '../lib/cookies.js';
+import {
+  createSession,
+  handoffKey,
+  issueHandoff,
+  issueSession,
+  refreshGraceKey,
+  revokeIfRefreshReused,
+  rotateSession,
+} from '../lib/session.js';
 import { toMeUser } from '../lib/cooldown.js';
 import { ensureBootstrapAdmin } from '../lib/adminEmails.js';
-import { requireAuth, requireCsrf, grantAdminStepUp, adminStepUpRemaining } from '../plugins/auth.js';
+import {
+  requireAuth,
+  requireCsrf,
+  grantAdminStepUp,
+  adminStepUpRemaining,
+  requireAdminStepUp,
+} from '../plugins/auth.js';
 import { assertFlag } from '../lib/flags.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { writeAudit } from '../lib/audit.js';
+import { httpError } from '../lib/http.js';
 import { oauthApiOrigin, requestWebOrigin, webOrigin } from '../lib/origins.js';
 import { asDbUser, ensureUserSealed, findLiveUserByEmail } from '../lib/erasure.js';
-import { isUniqueViolation, withRlsOff } from '../lib/rls.js';
+import { isUniqueViolation, userSelfColumns, withRlsOff } from '../lib/rls.js';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -25,162 +58,195 @@ import {
   type TelegramBotProfile,
 } from '../lib/telegram.js';
 
-const LOCK_AFTER = 25;
-const LOCK_MS = 2 * 60 * 1000;
+const LOCK_AFTER = 8;
+const LOCK_MS = 15 * 60 * 1000;
 const TG_LOGIN_TTL = 300;
+const STEPUP_MAX_FAILS = 5;
 
 export async function authRoutes(app: FastifyInstance) {
-  app.post('/auth/register', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireCsrf(req);
-    const body = registerSchema.parse(req.body);
-    return withRlsOff(app.db, async () => {
-      const existingEmail = await findLiveUserByEmail(app.db, app.env, body.email);
-      if (existingEmail) return reply.code(409).send({ error: 'Email already registered' });
-      const [existingHandle] = await app.db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.handle, body.handle))
-        .limit(1);
-      if (existingHandle) return reply.code(409).send({ error: 'Handle taken' });
-      const passwordHash = await hashPassword(body.password);
-      let user: typeof users.$inferSelect;
-      try {
-        const [created] = await app.db
-          .insert(users)
-          .values({
-            email: body.email,
-            passwordHash,
-            handle: body.handle,
-            displayName: sanitizeText(body.displayName),
-          })
-          .returning();
-        if (!created) return reply.code(500).send({ error: 'Failed' });
-        user = created;
-      } catch (err) {
-        if (isUniqueViolation(err)) {
-          return reply.code(409).send({ error: 'Email or handle already registered' });
+  app.post(
+    '/auth/register',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      const body = registerSchema.parse(req.body);
+      return withRlsOff(app.db, async () => {
+        const existingEmail = await findLiveUserByEmail(app.db, app.env, body.email);
+        if (existingEmail) return reply.code(409).send({ error: 'Email already registered' });
+        const [existingHandle] = await app.db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.handle, body.handle))
+          .limit(1);
+        if (existingHandle) return reply.code(409).send({ error: 'Handle taken' });
+        const passwordHash = await hashPassword(body.password);
+        let user: typeof users.$inferSelect;
+        try {
+          const [created] = await app.db.transaction((tx) =>
+            tx
+              .insert(users)
+              .values({
+                email: body.email,
+                passwordHash,
+                handle: body.handle,
+                displayName: sanitizeText(body.displayName),
+              })
+              .returning(),
+          );
+          if (!created) return reply.code(500).send({ error: 'Failed' });
+          user = created;
+        } catch (err) {
+          if (isUniqueViolation(err)) {
+            return reply.code(409).send({ error: 'Email or handle already registered' });
+          }
+          throw err;
         }
-        throw err;
-      }
-      if (!user.id) return reply.code(500).send({ error: 'Failed' });
-      await asDbUser(app.db, user.id);
-      const sealed = await ensureUserSealed(app.db, app.env, user);
-      await issueSession(app.db, app.env, reply, sealed.id, {
-        userAgent: req.headers['user-agent'],
-        ip: req.ip,
+        if (!user.id) return reply.code(500).send({ error: 'Failed' });
+        await asDbUser(app.db, user.id);
+        const sealed = await ensureUserSealed(app.db, app.env, user);
+        await issueSession(app.db, app.env, reply, sealed.id, {
+          userAgent: req.headers['user-agent'],
+          ip: req.ip,
+        });
+        await writeAudit(app.db, req, 'register', sealed.id);
+        const verifyToken = await issueRedisToken(app.redis, 'vo:verify', sealed.id, 60 * 60 * 24);
+        const verifyUrl = `${app.env.WEB_ORIGIN}/login?verify=${verifyToken}`;
+        await sendMail(app.env, req.log, {
+          to: sealed.email,
+          kind: 'verify_email',
+          url: verifyUrl,
+        });
+        return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
       });
-      await writeAudit(app.db, req, 'register', sealed.id);
-      const verifyToken = await issueRedisToken(app.redis, 'vo:verify', sealed.id, 60 * 60 * 24);
-      const verifyUrl = `${app.env.WEB_ORIGIN}/login?verify=${verifyToken}`;
-      await sendMail(app.env, req.log, {
-        to: sealed.email,
-        kind: 'verify_email',
-        url: verifyUrl,
-      });
-      return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
-    });
-  });
+    },
+  );
 
-  app.post('/auth/login', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireCsrf(req);
-    const body = loginSchema.parse(req.body);
-    return withRlsOff(app.db, async () => {
-      const login = body.login.trim().toLowerCase().replace(/^@/, '');
-      const user = login.includes('@')
-        ? await findLiveUserByEmail(app.db, app.env, login)
-        : (
-            await app.db
-              .select()
-              .from(users)
-              .where(and(eq(users.handle, login), isNull(users.deletedAt)))
-              .limit(1)
-          )[0];
-      if (!user || !user.passwordHash) return reply.code(401).send({ error: 'Invalid credentials' });
-      const ok = await verifyPassword(user.passwordHash, body.password);
-      // Correct password always wins — clear stale locks so “temporarily locked”
-      // cannot block a valid login while an existing session still works on reload.
-      if (ok) {
-        await app.db
-          .update(users)
-          .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
-          .where(eq(users.id, user.id));
-      } else {
-        const locked = user.lockedUntil && user.lockedUntil > new Date();
-        if (locked) {
-          return reply.code(423).send({ error: 'Account temporarily locked. Try again in a few minutes.' });
+  app.post(
+    '/auth/login',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      const body = loginSchema.parse(req.body);
+      return withRlsOff(app.db, async () => {
+        const login = body.login.trim().toLowerCase().replace(/^@/, '');
+        const user = login.includes('@')
+          ? await findLiveUserByEmail(app.db, app.env, login)
+          : (
+              await app.db
+                .select()
+                .from(users)
+                .where(and(eq(users.handle, login), isNull(users.deletedAt)))
+                .limit(1)
+            )[0];
+        const ok = await verifyPasswordOrDummy(user?.passwordHash, body.password);
+        if (!user) return reply.code(401).send({ error: 'Invalid credentials' });
+        // While locked, even the right password is refused; otherwise guessing just continues
+        // until it hits. Password reset clears the lock.
+        if (user.lockedUntil && user.lockedUntil > new Date()) {
+          return reply.code(423).send({
+            error: 'Account temporarily locked. Try again in a few minutes or reset your password.',
+          });
         }
-        const fails = user.failedLoginCount + 1;
-        await app.db
-          .update(users)
-          .set({
-            failedLoginCount: fails,
-            lockedUntil: fails >= LOCK_AFTER ? new Date(Date.now() + LOCK_MS) : null,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, user.id));
-        return reply.code(401).send({ error: 'Invalid credentials' });
-      }
-      // Drop whatever session cookie was on this browser so we never keep the previous account.
-      const prior = readCookies(req).refresh;
-      if (prior) {
-        await app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(prior)));
-      }
-      await asDbUser(app.db, user.id);
-      const sealed = await ensureUserSealed(app.db, app.env, user);
-      await issueSession(app.db, app.env, reply, sealed.id, {
-        userAgent: req.headers['user-agent'],
-        ip: req.ip,
+        if (ok) {
+          if (user.failedLoginCount || user.lockedUntil) {
+            await app.db
+              .update(users)
+              .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
+          }
+        } else {
+          // Counted in SQL so parallel guesses cannot overwrite each other's increment.
+          const lockUntil = new Date(Date.now() + LOCK_MS).toISOString();
+          await app.db
+            .update(users)
+            .set({
+              failedLoginCount: sql`${users.failedLoginCount} + 1`,
+              lockedUntil: sql`case when ${users.failedLoginCount} + 1 >= ${LOCK_AFTER} then ${lockUntil}::timestamptz else null end`,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, user.id));
+          return reply.code(401).send({ error: 'Invalid credentials' });
+        }
+        // Drop whatever session cookie was on this browser so we never keep the previous account.
+        const prior = readCookies(req).refresh;
+        if (prior) {
+          await app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(prior)));
+        }
+        await asDbUser(app.db, user.id);
+        const sealed = await ensureUserSealed(app.db, app.env, user);
+        await issueSession(app.db, app.env, reply, sealed.id, {
+          userAgent: req.headers['user-agent'],
+          ip: req.ip,
+        });
+        await writeAudit(app.db, req, 'login', sealed.id);
+        return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
       });
-      await writeAudit(app.db, req, 'login', sealed.id);
-      return { user: await toMeUser(app.db, app.env, app.s3, sealed) };
-    });
-  });
+    },
+  );
 
   app.post('/auth/logout', async (req, reply) => {
     requireCsrf(req);
     const { refresh } = readCookies(req);
     if (refresh) {
-      await app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(refresh)));
+      // The refresh secret is the proof; works even after the 1h access cookie expired.
+      await withRlsOff(app.db, () =>
+        app.db.delete(sessions).where(eq(sessions.refreshTokenHash, sha256(refresh))),
+      );
     }
     clearAuthCookies(reply, app.env);
     return { ok: true };
   });
 
-  app.post('/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireCsrf(req);
-    const { refresh } = readCookies(req);
-    if (!refresh) return reply.code(401).send({ error: 'No session' });
-    const hash = sha256(refresh);
-    const [session] = await app.db
-      .select()
-      .from(sessions)
-      .where(and(eq(sessions.refreshTokenHash, hash), gt(sessions.expiresAt, new Date())))
-      .limit(1);
-    if (!session) {
-      clearAuthCookies(reply, app.env);
-      return reply.code(401).send({ error: 'Expired session' });
-    }
-    const [live] = await app.db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(eq(users.id, session.userId), isNull(users.deletedAt)))
-      .limit(1);
-    if (!live) {
-      await app.db.delete(sessions).where(eq(sessions.id, session.id));
-      clearAuthCookies(reply, app.env);
-      return reply.code(401).send({ error: 'Expired session' });
-    }
-    await app.db.delete(sessions).where(eq(sessions.id, session.id));
-    await issueSession(app.db, app.env, reply, session.userId, {
-      userAgent: req.headers['user-agent'],
-      ip: req.ip,
-    });
-    return { ok: true };
-  });
+  app.post(
+    '/auth/refresh',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      const { refresh } = readCookies(req);
+      if (!refresh) return reply.code(401).send({ error: 'No session' });
+      const hash = sha256(refresh);
+      const [session] = await withRlsOff(app.db, () =>
+        app.db
+          .select()
+          .from(sessions)
+          .where(and(eq(sessions.refreshTokenHash, hash), gt(sessions.expiresAt, new Date())))
+          .limit(1),
+      );
+      if (!session) {
+        if (await app.redis.exists(refreshGraceKey(hash))) {
+          return reply
+            .code(409)
+            .send({ error: 'Session already refreshed', code: 'REFRESH_RACE' });
+        }
+        const stolen = await revokeIfRefreshReused(app.db, app.redis, hash);
+        clearAuthCookies(reply, app.env);
+        return reply.code(401).send({ error: stolen ? 'Session revoked' : 'Expired session' });
+      }
+      const [live] = await app.db
+        .select({ id: users.id, suspendedAt: users.suspendedAt })
+        .from(users)
+        .where(and(eq(users.id, session.userId), isNull(users.deletedAt)))
+        .limit(1);
+      if (!live || live.suspendedAt) {
+        await withRlsOff(app.db, () => app.db.delete(sessions).where(eq(sessions.id, session.id)));
+        clearAuthCookies(reply, app.env);
+        return reply.code(401).send({ error: 'Expired session' });
+      }
+      await rotateSession(app.db, app.env, app.redis, reply, session, {
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+      });
+      return { ok: true };
+    },
+  );
 
   app.get('/auth/me', async (req, reply) => {
     if (!req.authUser) return reply.code(401).send({ error: 'Unauthorized' });
-    const [row] = await app.db.select().from(users).where(eq(users.id, req.authUser.id)).limit(1);
+    const [row] = await app.db
+      .select(userSelfColumns)
+      .from(users)
+      .where(eq(users.id, req.authUser.id))
+      .limit(1);
     if (!row) return reply.code(401).send({ error: 'Unauthorized' });
     const user = await ensureBootstrapAdmin(app.db, app.env, row);
     return { user: await toMeUser(app.db, app.env, app.s3, user) };
@@ -194,67 +260,98 @@ export async function authRoutes(app: FastifyInstance) {
     return { csrf: token };
   });
 
-  app.post('/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req) => {
-    requireCsrf(req);
-    const body = forgotPasswordSchema.parse(req.body);
-    const user = await findLiveUserByEmail(app.db, app.env, body.email);
-    if (user?.passwordHash) {
-      const token = await issueRedisToken(app.redis, 'vo:reset', user.id, 60 * 60);
-      const url = `${app.env.WEB_ORIGIN}/login?reset=${token}`;
-      await sendMail(app.env, req.log, {
-        to: user.email,
-        kind: 'reset_password',
-        url,
-      });
-    }
-    return { ok: true };
-  });
+  app.post(
+    '/auth/forgot-password',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    async (req) => {
+      requireCsrf(req);
+      const body = forgotPasswordSchema.parse(req.body);
+      const user = await withRlsOff(app.db, () => findLiveUserByEmail(app.db, app.env, body.email));
+      if (user?.passwordHash) {
+        const token = await issueRedisToken(app.redis, 'vo:reset', user.id, 60 * 60);
+        const url = `${app.env.WEB_ORIGIN}/login?reset=${token}`;
+        await sendMail(app.env, req.log, {
+          to: user.email,
+          kind: 'reset_password',
+          url,
+        });
+      }
+      return { ok: true };
+    },
+  );
 
-  app.post('/auth/reset-password', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireCsrf(req);
-    const body = resetPasswordSchema.parse(req.body);
-    const userId = await consumeRedisToken(app.redis, 'vo:reset', body.token);
-    if (!userId) return reply.code(400).send({ error: 'Invalid or expired reset link' });
-    const [live] = await app.db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .limit(1);
-    if (!live) return reply.code(400).send({ error: 'Invalid or expired reset link' });
-    const passwordHash = await hashPassword(body.password);
-    await app.db.execute(sql`select set_config('app.allow_password', 'on', true)`);
-    await app.db
-      .update(users)
-      .set({ passwordHash, failedLoginCount: 0, lockedUntil: null, passwordChangedAt: new Date(), updatedAt: new Date() })
-      .where(eq(users.id, userId));
-    await app.db.delete(sessions).where(eq(sessions.userId, userId));
-    return { ok: true };
-  });
+  app.post(
+    '/auth/reset-password',
+    { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      const body = resetPasswordSchema.parse(req.body);
+      const userId = await consumeRedisToken(app.redis, 'vo:reset', body.token);
+      if (!userId) return reply.code(400).send({ error: 'Invalid or expired reset link' });
+      const [live] = await app.db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+        .limit(1);
+      if (!live) return reply.code(400).send({ error: 'Invalid or expired reset link' });
+      const passwordHash = await hashPassword(body.password);
+      await withRlsOff(app.db, async () => {
+        await app.db.execute(sql`select set_config('app.allow_password', 'on', true)`);
+        await app.db
+          .update(users)
+          .set({
+            passwordHash,
+            failedLoginCount: 0,
+            lockedUntil: null,
+            passwordChangedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, userId));
+        await app.db.execute(sql`select set_config('app.allow_password', '', true)`);
+        await app.db.delete(sessions).where(eq(sessions.userId, userId));
+      });
+      await writeAudit(app.db, req, 'password_reset', userId);
+      return { ok: true };
+    },
+  );
 
   app.post('/auth/verify-email', async (req, reply) => {
     requireCsrf(req);
     const body = verifyEmailSchema.parse(req.body);
     const userId = await consumeRedisToken(app.redis, 'vo:verify', body.token);
     if (!userId) return reply.code(400).send({ error: 'Invalid or expired verify link' });
-    await app.db.update(users).set({ emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, userId));
+    await withRlsOff(app.db, () =>
+      app.db
+        .update(users)
+        .set({ emailVerifiedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(users.id, userId), isNull(users.deletedAt))),
+    );
     return { ok: true };
   });
 
-  app.post('/auth/resend-verify', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireAuth(req, reply);
-    requireCsrf(req);
-    const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
-    if (!user) return reply.code(404).send({ error: 'Not found' });
-    if (user.emailVerifiedAt) return { ok: true };
-    const token = await issueRedisToken(app.redis, 'vo:verify', user.id, 60 * 60 * 24);
-    const url = `${app.env.WEB_ORIGIN}/login?verify=${token}`;
-    await sendMail(app.env, req.log, {
-      to: user.email,
-      kind: 'verify_email',
-      url,
-    });
-    return { ok: true };
-  });
+  app.post(
+    '/auth/resend-verify',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireAuth(req, reply);
+      requireCsrf(req);
+      const [user] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
+      if (!user) return reply.code(404).send({ error: 'Not found' });
+      if (user.emailVerifiedAt) return { ok: true };
+      const token = await issueRedisToken(app.redis, 'vo:verify', user.id, 60 * 60 * 24);
+      const url = `${app.env.WEB_ORIGIN}/login?verify=${token}`;
+      await sendMail(app.env, req.log, {
+        to: user.email,
+        kind: 'verify_email',
+        url,
+      });
+      return { ok: true };
+    },
+  );
 
   app.get('/auth/providers', async () => configuredAuthProviders(app.env));
 
@@ -288,6 +385,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
     }
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      signal: AbortSignal.timeout(10_000),
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -301,20 +399,35 @@ export async function authRoutes(app: FastifyInstance) {
     if (!tokenRes.ok) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
     const oauthTokens = (await tokenRes.json()) as { access_token?: string };
     const profileRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${oauthTokens.access_token}` },
     });
     if (!profileRes.ok) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
-    const profile = (await profileRes.json()) as { sub: string; email?: string; name?: string };
-    if (!profile.email) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    const profile = (await profileRes.json()) as {
+      sub: string;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+    };
+    // An unverified Google address must not link to, or mark verified, a VoiceOut account.
+    if (!profile.email || profile.email_verified !== true) {
+      return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
+    }
     let user;
     try {
       user = await upsertOAuth(app, 'google', profile.sub, profile.email, profile.name ?? 'User');
     } catch (err) {
       return redirectOAuthLinkError(app, reply, err);
     }
-    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
+    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, {
+      userAgent: req.headers['user-agent'],
+      ip: req.ip,
+    });
     await writeAudit(app.db, req, 'login_google', user.id);
-    const key = await issueHandoff(app.redis, sessionTokens);
+    const key = await issueHandoff(app.redis, {
+      userId: user.id,
+      sessionId: sessionTokens.sessionId,
+    });
     return finishOAuth(app, reply, req.cookies.vo_oauth_next, key);
   });
 
@@ -322,7 +435,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
     /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
-    if (!app.env.GITHUB_CLIENT_ID) return reply.code(501).send({ error: 'GitHub OAuth not configured' });
+    if (!app.env.GITHUB_CLIENT_ID)
+      return reply.code(501).send({ error: 'GitHub OAuth not configured' });
     const state = randomToken(16);
     const next = safeNext((req.query as { next?: string }).next);
     reply.setCookie('vo_oauth_state', state, oauthCookie(app));
@@ -361,15 +475,30 @@ export async function authRoutes(app: FastifyInstance) {
       headers: { authorization: `Bearer ${oauthTokens.access_token}`, accept: 'application/json' },
     });
     if (!profileRes.ok) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
-    const profile = (await profileRes.json()) as { id: number; login?: string; name?: string; email?: string | null };
+    const profile = (await profileRes.json()) as {
+      id: number;
+      login?: string;
+      name?: string;
+      email?: string | null;
+    };
     let email = profile.email ?? '';
     if (!email) {
       const mailRes = await fetch('https://api.github.com/user/emails', {
-        headers: { authorization: `Bearer ${oauthTokens.access_token}`, accept: 'application/json' },
+        headers: {
+          authorization: `Bearer ${oauthTokens.access_token}`,
+          accept: 'application/json',
+        },
       });
       if (mailRes.ok) {
-        const mails = (await mailRes.json()) as { email: string; primary?: boolean; verified?: boolean }[];
-        email = mails.find((m) => m.primary && m.verified)?.email ?? mails.find((m) => m.verified)?.email ?? '';
+        const mails = (await mailRes.json()) as {
+          email: string;
+          primary?: boolean;
+          verified?: boolean;
+        }[];
+        email =
+          mails.find((m) => m.primary && m.verified)?.email ??
+          mails.find((m) => m.verified)?.email ??
+          '';
       }
     }
     if (!email) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
@@ -385,9 +514,15 @@ export async function authRoutes(app: FastifyInstance) {
     } catch (err) {
       return redirectOAuthLinkError(app, reply, err);
     }
-    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
+    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, {
+      userAgent: req.headers['user-agent'],
+      ip: req.ip,
+    });
     await writeAudit(app.db, req, 'login_github', user.id);
-    const key = await issueHandoff(app.redis, sessionTokens);
+    const key = await issueHandoff(app.redis, {
+      userId: user.id,
+      sessionId: sessionTokens.sessionId,
+    });
     return finishOAuth(app, reply, req.cookies.vo_oauth_next, key);
   });
 
@@ -395,7 +530,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
     /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
-    if (!app.env.TIKTOK_CLIENT_KEY) return reply.code(501).send({ error: 'TikTok OAuth not configured' });
+    if (!app.env.TIKTOK_CLIENT_KEY)
+      return reply.code(501).send({ error: 'TikTok OAuth not configured' });
     const state = randomToken(16);
     const next = safeNext((req.query as { next?: string }).next);
     reply.setCookie('vo_oauth_state', state, oauthCookie(app));
@@ -445,9 +581,15 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const email = `tiktok_${oauthTokens.open_id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 40)}@users.invalid`;
     const user = await upsertOAuth(app, 'tiktok', oauthTokens.open_id, email, displayName);
-    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
+    const sessionTokens = await issueSession(app.db, app.env, reply, user.id, {
+      userAgent: req.headers['user-agent'],
+      ip: req.ip,
+    });
     await writeAudit(app.db, req, 'login_tiktok', user.id);
-    const key = await issueHandoff(app.redis, sessionTokens);
+    const key = await issueHandoff(app.redis, {
+      userId: user.id,
+      sessionId: sessionTokens.sessionId,
+    });
     return finishOAuth(app, reply, req.cookies.vo_oauth_next, key);
   });
 
@@ -455,10 +597,15 @@ export async function authRoutes(app: FastifyInstance) {
     if (legacyProvidersDisabled()) return reply.code(404).send({ error: 'Provider unavailable' });
     /* legacy implementation retained for existing account data; new sign-ins are disabled */
     assertFlag(app.env, 'KILL_OAUTH');
-    if (!app.env.APPLE_CLIENT_ID) return reply.code(501).send({ error: 'Apple OAuth not configured' });
+    if (!app.env.APPLE_CLIENT_ID)
+      return reply.code(501).send({ error: 'Apple OAuth not configured' });
     const state = randomToken(16);
     reply.setCookie('vo_oauth_state', state, oauthCookie(app));
-    reply.setCookie('vo_oauth_next', safeNext((req.query as { next?: string }).next), oauthCookie(app));
+    reply.setCookie(
+      'vo_oauth_next',
+      safeNext((req.query as { next?: string }).next),
+      oauthCookie(app),
+    );
     const params = new URLSearchParams({
       client_id: app.env.APPLE_CLIENT_ID,
       redirect_uri: `${oauthApiOrigin(app.env)}/auth/apple/callback`,
@@ -496,12 +643,23 @@ export async function authRoutes(app: FastifyInstance) {
       if (!tokenRes.ok) return reply.redirect(`${webOrigin(app.env)}/login?error=oauth`);
       const tokens = (await tokenRes.json()) as { id_token?: string };
       const payload = decodeJwt(tokens.id_token ?? '');
-      const email = typeof payload.email === 'string' ? payload.email : `apple_${payload.sub}@privaterelay.appleid.com`;
-      const name = body.user ? (JSON.parse(body.user) as { name?: { firstName?: string } }).name?.firstName : 'User';
+      const email =
+        typeof payload.email === 'string'
+          ? payload.email
+          : `apple_${payload.sub}@privaterelay.appleid.com`;
+      const name = body.user
+        ? (JSON.parse(body.user) as { name?: { firstName?: string } }).name?.firstName
+        : 'User';
       const user = await upsertOAuth(app, 'apple', String(payload.sub), email, name ?? 'User');
-      const sessionTokens = await issueSession(app.db, app.env, reply, user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
+      const sessionTokens = await issueSession(app.db, app.env, reply, user.id, {
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+      });
       await writeAudit(app.db, req, 'login_apple', user.id);
-      const key = await issueHandoff(app.redis, sessionTokens);
+      const key = await issueHandoff(app.redis, {
+        userId: user.id,
+        sessionId: sessionTokens.sessionId,
+      });
       return finishOAuth(app, reply, req.cookies.vo_oauth_next, key);
     } catch (err) {
       if (err instanceof Error && err.message === 'EMAIL_UNVERIFIED') {
@@ -539,7 +697,12 @@ export async function authRoutes(app: FastifyInstance) {
       }
       const next = safeNext((req.body as { next?: string } | undefined)?.next);
       const id = randomBytes(16).toString('hex');
-      await app.redis.set(`vo:tg:login:${id}`, JSON.stringify({ status: 'pending', next }), 'EX', TG_LOGIN_TTL);
+      await app.redis.set(
+        `vo:tg:login:${id}`,
+        JSON.stringify({ status: 'pending', next }),
+        'EX',
+        TG_LOGIN_TTL,
+      );
       return { id, url: `https://t.me/${providers.telegramUsername}?start=vo${id}` };
     },
   );
@@ -556,7 +719,11 @@ export async function authRoutes(app: FastifyInstance) {
       await ingestTelegramStarts(app);
       const raw = await app.redis.get(`vo:tg:login:${id}`);
       if (!raw) return { status: 'expired' as const };
-      const state = JSON.parse(raw) as { status: string; next?: string; profile?: TelegramBotProfile };
+      const state = JSON.parse(raw) as {
+        status: string;
+        next?: string;
+        profile?: TelegramBotProfile;
+      };
       if (state.status !== 'ready' || !state.profile) return { status: 'pending' as const };
       await app.redis.del(`vo:tg:login:${id}`);
       const result = await finishTelegramLogin(app, req, reply, state.profile, state.next);
@@ -574,12 +741,13 @@ export async function authRoutes(app: FastifyInstance) {
         userAgent: req.headers['user-agent'],
         ip: req.ip,
       });
-      const k = await issueHandoff(app.redis, {
-        access: tokens.access,
-        refresh: tokens.refresh,
-        csrf: tokens.csrf,
-      });
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      const linkTtlSec = 60 * 60;
+      const k = await issueHandoff(
+        app.redis,
+        { userId: req.authUser!.id, sessionId: tokens.sessionId },
+        linkTtlSec,
+      );
+      const expiresAt = new Date(Date.now() + linkTtlSec * 1000);
       const [row] = await app.db
         .insert(deviceLinks)
         .values({
@@ -655,6 +823,13 @@ export async function authRoutes(app: FastifyInstance) {
       if (role !== 'admin' && role !== 'moderator') {
         return reply.code(403).send({ error: 'Forbidden' });
       }
+      // Moving an existing binding is how a stolen session would lock the owner out.
+      const [bound] = await app.db
+        .select({ adminDeviceHash: users.adminDeviceHash })
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
+      if (bound?.adminDeviceHash) await requireAdminStepUp(app, req);
       const token = randomToken(32);
       await app.db
         .update(users)
@@ -672,7 +847,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (role !== 'admin' && role !== 'moderator') {
       return reply.code(403).send({ error: 'Forbidden' });
     }
-    const remainingSec = await adminStepUpRemaining(app, req.authUser!.id);
+    const remainingSec = await adminStepUpRemaining(app, req.authUser!.sid);
     return { active: remainingSec > 0, remainingSec };
   });
 
@@ -686,7 +861,11 @@ export async function authRoutes(app: FastifyInstance) {
       if (role !== 'admin' && role !== 'moderator') {
         return reply.code(403).send({ error: 'Forbidden' });
       }
-      const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      const [user] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
       if (!user || user.email.endsWith('@users.invalid')) {
         return reply.code(400).send({ error: 'Add a real email before using email confirmation' });
       }
@@ -720,21 +899,39 @@ export async function authRoutes(app: FastifyInstance) {
       if (!body.password && !body.code) {
         return reply.code(400).send({ error: 'Enter your password or email code' });
       }
-      const [user] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+      const [user] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.authUser!.id))
+        .limit(1);
       if (!user) return reply.code(401).send({ error: 'Unauthorized' });
 
       if (body.password) {
         if (!user.passwordHash) {
-          return reply.code(400).send({ error: 'This account has no password. Use the email code.' });
+          return reply
+            .code(400)
+            .send({ error: 'This account has no password. Use the email code.' });
+        }
+        const failKey = `vo:admin-stepup-fail:${user.id}`;
+        const fails = Number((await app.redis.get(failKey)) ?? 0);
+        if (fails >= STEPUP_MAX_FAILS) {
+          return reply
+            .code(429)
+            .send({ error: 'Too many wrong passwords. Use the email code or wait 15 minutes.' });
         }
         const ok = await verifyPassword(user.passwordHash, body.password);
-        if (!ok) return reply.code(401).send({ error: 'Wrong password' });
+        if (!ok) {
+          const n = await app.redis.incr(failKey);
+          if (n === 1) await app.redis.expire(failKey, 15 * 60);
+          return reply.code(401).send({ error: 'Wrong password' });
+        }
+        await app.redis.del(failKey);
       } else if (body.code) {
         const otp = await consumeOtpCode(app.redis, 'vo:admin-stepup-otp', user.id, body.code);
         if (!otp) return reply.code(400).send({ error: 'Invalid or expired code' });
       }
 
-      const ttl = await grantAdminStepUp(app, user.id);
+      const ttl = await grantAdminStepUp(app, req.authUser!.sid);
       await writeAudit(app.db, req, 'admin_stepup', user.id);
       return { ok: true, remainingSec: ttl };
     },
@@ -750,29 +947,72 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.redirect(`${origin}/device-login?${params.toString()}`);
   });
 
-  app.post('/auth/handoff/claim', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
-    requireCsrf(req);
-    const body = z.object({ k: z.string().min(8).max(128), next: z.string().optional() }).parse(req.body ?? {});
-    const tokenHash = sha256(body.k);
-    const [link] = await app.db.select().from(deviceLinks).where(eq(deviceLinks.tokenHash, tokenHash)).limit(1);
-    if (link?.revokedAt) return reply.code(400).send({ error: 'Link revoked' });
-    if (link && link.expiresAt < new Date()) return reply.code(400).send({ error: 'Link expired' });
-    const raw = await app.redis.get(`vo:handoff:${body.k}`);
-    if (!raw) return reply.code(400).send({ error: 'Link expired or already used' });
-    await app.redis.del(`vo:handoff:${body.k}`);
-    const tokens = JSON.parse(raw) as { access: string; refresh: string; csrf: string };
-    const origin = requestWebOrigin(req, app.env);
-    setAuthCookies(reply, app.env, tokens.access, tokens.refresh, tokens.csrf, {
-      secure: origin.startsWith('https://'),
-    });
-    if (link) {
-      await app.db
-        .update(deviceLinks)
-        .set({ claimedAt: new Date() })
-        .where(and(eq(deviceLinks.id, link.id), isNull(deviceLinks.claimedAt)));
-    }
-    return { ok: true, next: safeNext(body.next) };
-  });
+  app.post(
+    '/auth/handoff/claim',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      requireCsrf(req);
+      const body = z
+        .object({ k: z.string().min(8).max(128), next: z.string().optional() })
+        .parse(req.body ?? {});
+      const tokenHash = sha256(body.k);
+      const [link] = await withRlsOff(app.db, () =>
+        app.db.select().from(deviceLinks).where(eq(deviceLinks.tokenHash, tokenHash)).limit(1),
+      );
+      if (link?.revokedAt) return reply.code(400).send({ error: 'Link revoked' });
+      if (link && link.expiresAt < new Date())
+        return reply.code(400).send({ error: 'Link expired' });
+      const slot = handoffKey(body.k);
+      let raw = await app.redis.getdel(slot);
+      if (raw) {
+        // Short grace so a double-submitted claim from the same page does not fail.
+        await app.redis.set(`${slot}:ok`, raw, 'EX', 30);
+      } else {
+        raw = await app.redis.get(`${slot}:ok`);
+      }
+      if (!raw) return reply.code(400).send({ error: 'Link expired or already used' });
+      const payload = JSON.parse(raw) as { userId?: string; sessionId?: string };
+      if (!payload.userId) return reply.code(400).send({ error: 'Link expired or already used' });
+      await withRlsOff(app.db, async () => {
+        const [live] = await app.db
+          .select({ id: users.id, suspendedAt: users.suspendedAt })
+          .from(users)
+          .where(and(eq(users.id, payload.userId!), isNull(users.deletedAt)))
+          .limit(1);
+        if (!live || live.suspendedAt) throw httpError(401, 'Expired session');
+        if (payload.sessionId) {
+          const [session] = await app.db
+            .select()
+            .from(sessions)
+            .where(eq(sessions.id, payload.sessionId))
+            .limit(1);
+          // A link minted for a session that was since revoked (logout, password reset)
+          // must not mint a fresh one.
+          if (!session || session.userId !== live.id || session.expiresAt <= new Date()) {
+            throw httpError(400, 'Link expired or already used');
+          }
+          await rotateSession(app.db, app.env, app.redis, reply, session, {
+            userAgent: req.headers['user-agent'],
+            ip: req.ip,
+          });
+        } else {
+          await issueSession(app.db, app.env, reply, live.id, {
+            userAgent: req.headers['user-agent'],
+            ip: req.ip,
+          });
+        }
+      });
+      if (link) {
+        await withRlsOff(app.db, async () => {
+          await app.db
+            .update(deviceLinks)
+            .set({ claimedAt: new Date() })
+            .where(and(eq(deviceLinks.id, link.id), isNull(deviceLinks.claimedAt)));
+        });
+      }
+      return { ok: true, next: safeNext(body.next) };
+    },
+  );
 }
 
 function oauthCookie(app: FastifyInstance) {
@@ -795,7 +1035,9 @@ async function finishTelegramLogin(
 ) {
   const email = `telegram_${profile.id}@users.invalid`;
   const name =
-    [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.username || 'Telegram user';
+    [profile.first_name, profile.last_name].filter(Boolean).join(' ') ||
+    profile.username ||
+    'Telegram user';
   const user = await upsertOAuth(app, 'telegram', profile.id, email, name, false);
   if (profile.phone) {
     const [taken] = await app.db
@@ -810,7 +1052,10 @@ async function finishTelegramLogin(
       });
     }
     if (!user.phone) {
-      await app.db.update(users).set({ phone: profile.phone, updatedAt: new Date() }).where(eq(users.id, user.id));
+      await app.db
+        .update(users)
+        .set({ phone: profile.phone, updatedAt: new Date() })
+        .where(eq(users.id, user.id));
     }
   }
   const tokens = await issueSession(app.db, app.env, reply, user.id, {
@@ -818,8 +1063,10 @@ async function finishTelegramLogin(
     ip: req.ip,
   });
   await writeAudit(app.db, req, 'login_telegram', user.id);
-  const key = await issueHandoff(app.redis, tokens);
-  return { handoff: `/vo-api/auth/handoff?k=${encodeURIComponent(key)}&next=${encodeURIComponent(safeNext(next))}` };
+  const key = await issueHandoff(app.redis, { userId: user.id, sessionId: tokens.sessionId });
+  return {
+    handoff: `/vo-api/auth/handoff?k=${encodeURIComponent(key)}&next=${encodeURIComponent(safeNext(next))}`,
+  };
 }
 
 let telegramPollBusyUntil = 0;
@@ -876,11 +1123,24 @@ async function ingestTelegramStarts(app: FastifyInstance) {
 }
 
 function safeNext(raw?: string) {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || raw.includes('://')) return '/';
+  if (
+    !raw ||
+    !raw.startsWith('/') ||
+    raw.startsWith('//') ||
+    raw.includes('\\') ||
+    raw.includes('://') ||
+    /[\u0000-\u0020\u007f]/.test(raw)
+  )
+    return '/';
   return raw.slice(0, 200);
 }
 
-function finishOAuth(app: FastifyInstance, reply: import('fastify').FastifyReply, nextCookie?: string, handoffKey?: string) {
+function finishOAuth(
+  app: FastifyInstance,
+  reply: import('fastify').FastifyReply,
+  nextCookie?: string,
+  handoffKey?: string,
+) {
   reply.clearCookie('vo_oauth_state', { path: '/' });
   reply.clearCookie('vo_oauth_next', { path: '/' });
   const next = safeNext(nextCookie);
@@ -891,14 +1151,19 @@ function finishOAuth(app: FastifyInstance, reply: import('fastify').FastifyReply
   return reply.redirect(`${webOrigin(app.env)}${next}`);
 }
 
-function redirectOAuthLinkError(app: FastifyInstance, reply: import('fastify').FastifyReply, err: unknown) {
+function redirectOAuthLinkError(
+  app: FastifyInstance,
+  reply: import('fastify').FastifyReply,
+  err: unknown,
+) {
   if (err instanceof Error && err.message === 'EMAIL_UNVERIFIED') {
     return reply.redirect(`${webOrigin(app.env)}/login?error=email_unverified`);
   }
   throw err;
 }
 
-async function upsertOAuth(
+/** Provider identity is already verified by the caller; linking has to look across accounts. */
+function upsertOAuth(
   app: FastifyInstance,
   provider: 'google' | 'apple' | 'github' | 'tiktok' | 'telegram',
   providerAccountId: string,
@@ -906,10 +1171,28 @@ async function upsertOAuth(
   displayName: string,
   allowEmailLink = true,
 ) {
+  return withRlsOff(app.db, () =>
+    linkOAuthAccount(app, provider, providerAccountId, email, displayName, allowEmailLink),
+  );
+}
+
+async function linkOAuthAccount(
+  app: FastifyInstance,
+  provider: 'google' | 'apple' | 'github' | 'tiktok' | 'telegram',
+  providerAccountId: string,
+  email: string,
+  displayName: string,
+  allowEmailLink: boolean,
+) {
   const [existing] = await app.db
     .select()
     .from(oauthAccounts)
-    .where(and(eq(oauthAccounts.provider, provider), eq(oauthAccounts.providerAccountId, providerAccountId)))
+    .where(
+      and(
+        eq(oauthAccounts.provider, provider),
+        eq(oauthAccounts.providerAccountId, providerAccountId),
+      ),
+    )
     .limit(1);
   if (existing) {
     const [user] = await app.db.select().from(users).where(eq(users.id, existing.userId)).limit(1);
@@ -946,17 +1229,25 @@ async function upsertOAuth(
 }
 
 async function uniqueHandle(app: FastifyInstance, email: string) {
-  const base = email
-    .split('@')[0]
-    ?.toLowerCase()
-    .replace(/[^a-z0-9_]/g, '')
-    .slice(0, 12) || 'user';
+  const base =
+    email
+      .split('@')[0]
+      ?.toLowerCase()
+      .replace(/[^a-z0-9_]/g, '')
+      .slice(0, 12) || 'user';
   for (let i = 0; i < 20; i++) {
     const handle = `${base}${i === 0 ? '' : i + Math.floor(Math.random() * 90)}`.slice(0, 20);
-    const [hit] = await app.db.select({ id: users.id }).from(users).where(eq(users.handle, handle)).limit(1);
+    const [hit] = await app.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.handle, handle))
+      .limit(1);
     if (!hit) return handle;
   }
-  return `u${randomToken(6).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12)}`;
+  return `u${randomToken(6)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 12)}`;
 }
 
 function decodeJwt(token: string): Record<string, unknown> {

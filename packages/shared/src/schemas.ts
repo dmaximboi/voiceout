@@ -64,6 +64,13 @@ export const updateProfileSchema = z.object({
   bio: z.string().trim().max(MAX_BIO_LENGTH).optional(),
   handle: handleSchema.optional(),
   verificationCode: z.string().trim().regex(/^\d{6}$/).optional(),
+  city: z.string().trim().max(80).optional(),
+  country: z.string().trim().max(8).optional(),
+});
+
+export const placeSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
 });
 
 export const linkEmailSchema = z.object({

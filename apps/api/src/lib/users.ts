@@ -5,7 +5,7 @@ import {
   users,
   type Db,
 } from '@voiceout/db';
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PublicUser } from '@voiceout/shared';
 import { activePlanTier, planBadge, PLAN_DEFINITIONS } from '@voiceout/shared';
 import type { Env } from '../env.js';
@@ -57,6 +57,55 @@ export async function toPublicUser(
     planBadge: planBadge(tier),
     nameAccent: tier ? PLAN_DEFINITIONS[tier].nameAccent : false,
   };
+}
+
+export async function toPublicUsers(
+  db: Db,
+  env: Env,
+  s3: S3Client,
+  rows: Parameters<typeof toPublicUser>[3][],
+): Promise<Map<string, PublicUser>> {
+  const out = new Map<string, PublicUser>();
+  if (rows.length === 0) return out;
+  const ids = rows.map((row) => row.id);
+  const avatarIds = rows.flatMap((row) => (row.avatarMediaId ? [row.avatarMediaId] : []));
+  const [followerRows, followingRows, avatarRows] = await Promise.all([
+    db
+      .select({ id: follows.followeeId, n: sql<number>`count(*)::int` })
+      .from(follows)
+      .where(inArray(follows.followeeId, ids))
+      .groupBy(follows.followeeId),
+    db
+      .select({ id: follows.followerId, n: sql<number>`count(*)::int` })
+      .from(follows)
+      .where(inArray(follows.followerId, ids))
+      .groupBy(follows.followerId),
+    avatarIds.length
+      ? db.select().from(mediaObjects).where(inArray(mediaObjects.id, avatarIds))
+      : Promise.resolve([] as (typeof mediaObjects.$inferSelect)[]),
+  ]);
+  const followers = new Map(followerRows.map((row) => [row.id, row.n]));
+  const following = new Map(followingRows.map((row) => [row.id, row.n]));
+  const avatars = new Map(avatarRows.map((row) => [row.id, row]));
+  void env;
+  void s3;
+  for (const row of rows) {
+    const media = row.avatarMediaId ? avatars.get(row.avatarMediaId) : undefined;
+    const tier = activePlanTier(row.planTier, row.studioUntil);
+    out.set(row.id, {
+      id: row.id,
+      handle: row.handle,
+      displayName: row.displayName,
+      bio: row.bio,
+      avatarUrl: media && media.status === 'ready' ? publicMediaUrl(media.id) : null,
+      followerCount: followers.get(row.id) ?? 0,
+      followingCount: following.get(row.id) ?? 0,
+      createdAt: row.createdAt.toISOString(),
+      planBadge: planBadge(tier),
+      nameAccent: tier ? PLAN_DEFINITIONS[tier].nameAccent : false,
+    });
+  }
+  return out;
 }
 
 export function deletedPublicUser(id: string): PublicUser {

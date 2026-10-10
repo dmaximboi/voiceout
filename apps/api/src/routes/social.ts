@@ -7,6 +7,7 @@ import { hydratePosts } from '../lib/hydrate.js';
 import { notify } from '../lib/notify.js';
 import { sanitizeText } from '../lib/sanitize.js';
 import { toPublicUser } from '../lib/users.js';
+import { userPublicColumns } from '../lib/rls.js';
 import { users } from '@voiceout/db';
 import { z } from 'zod';
 
@@ -163,7 +164,7 @@ export async function socialRoutes(app: FastifyInstance) {
     const postRows = await app.db.select().from(posts).where(and(eq(posts.status, 'published'), inArray(posts.id, postIds)));
     const cards = await hydratePosts(app.db, app.env, app.s3, postRows, req.authUser!.id);
     const byId = new Map(cards.map((c) => [c.id, c]));
-    const [me] = await app.db.select().from(users).where(eq(users.id, req.authUser!.id)).limit(1);
+    const [me] = await app.db.select(userPublicColumns).from(users).where(eq(users.id, req.authUser!.id)).limit(1);
     const actor = me ? await toPublicUser(app.db, app.env, app.s3, me) : null;
     const items = [
       ...voiceRows.map((v) => ({

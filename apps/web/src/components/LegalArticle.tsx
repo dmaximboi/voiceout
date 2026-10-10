@@ -19,7 +19,9 @@ export function LegalArticle({
       </p>
       <h1 className="mt-4 text-2xl font-bold">{title}</h1>
       <p className="mt-1 text-sm text-[var(--muted)]">Last updated {updated}</p>
-      <div className="mt-6 space-y-4 text-[15px] leading-7">{children}</div>
+      <div className="legal-prose mt-6 space-y-4 text-[15px] leading-7 [&_h2]:pt-4 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:pt-2 [&_h3]:text-base [&_h3]:font-semibold [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-5 [&_a]:text-accent">
+        {children}
+      </div>
     </article>
   );
 }
