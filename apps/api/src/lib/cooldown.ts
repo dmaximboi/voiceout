@@ -57,6 +57,8 @@ export async function toMeUser(db: Db, env: Env, s3: S3Client, user: UserRow) {
     planUntil: until,
     isStudio: Boolean(tier),
     studioUntil: until,
+    city: user.city ?? null,
+    country: user.country ?? null,
     ...profileLocks(user),
   };
 }

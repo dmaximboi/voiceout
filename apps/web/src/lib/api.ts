@@ -48,7 +48,30 @@ function asJsonObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
-type ApiInit = RequestInit & { _csrfRetry?: boolean };
+type ApiInit = RequestInit & { _csrfRetry?: boolean; _authRetry?: boolean };
+
+let refreshing: Promise<boolean> | null = null;
+
+/** One refresh for every request that saw the expired access token at the same moment. */
+function refreshSession(): Promise<boolean> {
+  refreshing ??= (async () => {
+    try {
+      const res = await fetch(`${API}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'x-csrf-token': (await ensureCsrf()) ?? '' },
+      });
+      clearCsrf();
+      // 409: another tab already rotated it; the browser now holds the new cookies.
+      return res.ok || res.status === 409;
+    } catch {
+      return false;
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
+}
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
@@ -78,21 +101,20 @@ async function apiInner<T>(path: string, init: ApiInit = {}): Promise<T> {
     credentials: 'include',
     headers,
   });
-  if (res.status === 401 && path !== '/auth/refresh') {
-    const refreshed = await fetch(`${API}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'x-csrf-token': (await ensureCsrf()) ?? '' },
-    });
-    if (refreshed.ok) {
-      clearCsrf();
-      return apiInner<T>(path, init);
-    }
-  }
   if (!res.ok) {
     let msg = res.statusText || 'Request failed';
     const extra = asJsonObject(await readJson(res));
     if (typeof extra.error === 'string') msg = extra.error;
+    // Only an expired/missing session is retried; "wrong password" style 401s are answers.
+    if (
+      res.status === 401 &&
+      msg === 'Unauthorized' &&
+      !init._authRetry &&
+      path !== '/auth/refresh' &&
+      (await refreshSession())
+    ) {
+      return apiInner<T>(path, { ...init, _authRetry: true });
+    }
     if (res.status === 403 && msg === 'CSRF' && !init._csrfRetry) {
       clearCsrf();
       return apiInner<T>(path, { ...init, _csrfRetry: true });

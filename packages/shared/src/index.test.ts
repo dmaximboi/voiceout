@@ -7,7 +7,7 @@ import {
   passwordSchema,
   isAllowedAudioMime,
 } from './schemas';
-import { COMMENT_CATEGORIES, DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
+import { COMMENT_CATEGORIES, classifyCaptionShelf, classifyCaptionTopic, DURATION_CAPS, MAX_AUDIO_BYTES } from './constants';
 import { nameChangeAvailableAt, passwordChangeAvailableAt } from './cooldowns';
 import { isPrivateAdminRequest, isPrivateHost, isPrivateIp } from './lan';
 import { matchesUploadMagic, sniffUploadMime, looksLikeHostileUpload } from './magic';
@@ -22,6 +22,20 @@ describe('handleSchema', () => {
   });
   it('rejects reserved', () => {
     expect(() => handleSchema.parse('admin')).toThrow();
+    expect(() => handleSchema.parse('welcome')).toThrow();
+  });
+});
+
+describe('caption shelves', () => {
+  it('tags idea and education from caption words', () => {
+    expect(classifyCaptionShelf('An idea I had this morning')).toBe('idea');
+    expect(classifyCaptionShelf('A short lesson to learn today')).toBe('education');
+    expect(classifyCaptionShelf('just a voice')).toBeNull();
+  });
+
+  it('only sets a rare topic on a strong match', () => {
+    expect(classifyCaptionTopic('this song and the album')).toBe('music');
+    expect(classifyCaptionTopic('one song')).toBeNull();
   });
 });
 

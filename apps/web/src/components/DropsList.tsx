@@ -25,7 +25,9 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
       .then((d) => {
         if (cancelled) return;
         setItems(d.notifications);
-        const unreadIds = d.notifications.filter((item) => !item.readAt && !item.id.startsWith('trend-')).map((item) => item.id);
+        const unreadIds = d.notifications
+          .filter((item) => !item.readAt && !item.id.startsWith('trend-'))
+          .map((item) => item.id);
         if (unreadIds.length) {
           onViewed?.(unreadIds);
           void markRead(unreadIds).catch(() => undefined);
@@ -62,7 +64,10 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
     return (
       <div className="px-4 py-6">
         <p className="text-sm text-[var(--muted)]">Quiet for now. Log in to catch your drops.</p>
-        <Link href="/login" className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-accent">
+        <Link
+          href="/login"
+          className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-accent"
+        >
           Log in
         </Link>
       </div>
@@ -89,18 +94,27 @@ export function DropsList({ onViewed }: { onViewed?: (ids: string[]) => void }) 
       <ul>
         {items.map((n) => (
           <li key={n.id} className="flex gap-3 border-b border-[var(--line)] px-4 py-3">
-            <Avatar name={n.actor.displayName} src={n.actor.avatarUrl} />
-            <div className="text-sm">
-              <Link href={`/u/${n.actor.handle}`} className="font-semibold">
-                @{n.actor.handle}
-              </Link>{' '}
-              {label(n.type)}
-              {n.postId ? (
-                <Link href={`/post/${n.postId}`} className="ml-1 text-accent">
-                  View
-                </Link>
-              ) : null}
-            </div>
+            {n.type === 'account_warning' ? (
+              <div className="text-sm">
+                <p className="font-semibold">Account notice from VoiceOut</p>
+                {n.message ? <p className="mt-0.5 text-[var(--muted)]">{n.message}</p> : null}
+              </div>
+            ) : (
+              <>
+                <Avatar name={n.actor.displayName} src={n.actor.avatarUrl} />
+                <div className="text-sm">
+                  <Link href={`/u/${n.actor.handle}`} className="font-semibold">
+                    @{n.actor.handle}
+                  </Link>{' '}
+                  {label(n.type)}
+                  {n.postId ? (
+                    <Link href={`/post/${n.postId}`} className="ml-1 text-accent">
+                      View
+                    </Link>
+                  ) : null}
+                </div>
+              </>
+            )}
           </li>
         ))}
       </ul>

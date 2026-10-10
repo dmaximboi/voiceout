@@ -43,7 +43,7 @@ export function GuestHome() {
         </p>
         <FeedList posts={SAMPLE_POSTS} onChange={() => undefined} autoPlay={false} />
         <p className="mt-3 px-3 text-center text-xs text-[var(--muted)]">
-          Demo audio, short video, and photos. You can swap these clips later.
+          Sample voices, short video, and photos.
         </p>
       </section>
     </div>

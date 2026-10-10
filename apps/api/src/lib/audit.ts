@@ -9,7 +9,7 @@ export async function writeAudit(
   meta?: Record<string, unknown>,
 ) {
   try {
-    await db.insert(auditLogs).values({ userId, action, ip: req.ip, meta });
+    await db.transaction((tx) => tx.insert(auditLogs).values({ userId, action, ip: req.ip, meta }));
   } catch (err) {
     req.log.error({ err, action }, 'audit insert failed');
   }

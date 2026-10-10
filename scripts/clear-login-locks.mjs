@@ -32,11 +32,14 @@ const before = await sql`
   limit 20
 `;
 console.log('before', before);
-const cleared = await sql`
-  update users
-  set failed_login_count = 0, locked_until = null, updated_at = now()
-  where locked_until is not null or failed_login_count > 0
-  returning email, handle
-`;
+const cleared = await sql.begin(async (tx) => {
+  await tx`select set_config('app.rls', 'off', true)`;
+  return tx`
+    update users
+    set failed_login_count = 0, locked_until = null, updated_at = now()
+    where locked_until is not null or failed_login_count > 0
+    returning email, handle
+  `;
+});
 console.log('cleared', cleared.length, cleared);
 await sql.end();

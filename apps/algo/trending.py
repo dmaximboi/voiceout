@@ -34,7 +34,11 @@ TRENDING_FACTOR_NAMES = tuple(TRENDING_FACTOR_WEIGHTS)
 
 
 def _conn() -> psycopg.Connection:
-    return psycopg.connect(os.environ.get("DATABASE_OWNER_URL") or os.environ["DATABASE_URL"])
+    """Service connection. RLS is fail-closed, so the batch job opts out inside its own
+    transaction (transaction-local, safe behind a pooler); it ends at commit."""
+    conn = psycopg.connect(os.environ.get("DATABASE_OWNER_URL") or os.environ["DATABASE_URL"])
+    conn.execute("select set_config('app.rls', 'off', true)")
+    return conn
 
 
 _redis_client: redis.Redis | None = None
@@ -277,7 +281,9 @@ def recompute_trending() -> list[str]:
     signal_payload = {"version": 2, "computed_at": now.isoformat(), "signals": signals}
     r = _redis()
     # v2 only + longer TTL: half the writes, fewer refreshes on Upstash free tier.
-    ttl = int(os.environ.get("TRENDING_REDIS_TTL_SEC", "3600"))
+    # Must outlive the backend's recompute interval (TRENDING_EVERY_MS, 2h) or ranking loses
+    # trending signals until the next run.
+    ttl = int(os.environ.get("TRENDING_REDIS_TTL_SEC", str(3 * 3600)))
     r.set(REDIS_KEY_V2, json.dumps(payload), ex=ttl)
     r.set(REDIS_SIGNALS_V2, json.dumps(signal_payload), ex=ttl)
     if ids:

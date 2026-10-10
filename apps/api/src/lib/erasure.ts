@@ -16,6 +16,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { Env } from '../env.js';
 import { deleteObject } from './s3.js';
+import { withRlsOff } from './rls.js';
 
 const AES = 'aes-256-gcm';
 
@@ -112,25 +113,32 @@ export async function cryptographicallyEraseUser(
 ) {
   const media = await db.select().from(mediaObjects).where(eq(mediaObjects.userId, userId));
 
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`select set_config('app.user_id', ${userId}, true)`);
-    await tx.execute(sql`select set_config('app.allow_password', 'on', true)`);
-    await tx.execute(sql`select set_config('app.rls', 'off', true)`);
-    await tx.delete(userKeys).where(eq(userKeys.userId, userId));
-    await tx.delete(notifications).where(
-      or(eq(notifications.userId, userId), eq(notifications.actorId, userId)),
-    );
-    await tx.delete(comments).where(eq(comments.authorId, userId));
-    await tx.delete(posts).where(eq(posts.authorId, userId));
-    await tx.delete(reports).where(
-      or(eq(reports.reporterId, userId), and(eq(reports.targetType, 'user'), eq(reports.targetId, userId))),
-    );
-    await tx.delete(auditLogs).where(eq(auditLogs.userId, userId));
-    await tx.delete(sessions).where(eq(sessions.userId, userId));
-    await tx.delete(oauthAccounts).where(eq(oauthAccounts.userId, userId));
-    await tx.delete(mediaObjects).where(eq(mediaObjects.userId, userId));
-    await tx.delete(users).where(eq(users.id, userId));
-  });
+  await withRlsOff(db, () =>
+    db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.user_id', ${userId}, true)`);
+      await tx.execute(sql`select set_config('app.allow_password', 'on', true)`);
+      await tx.delete(userKeys).where(eq(userKeys.userId, userId));
+      await tx
+        .delete(notifications)
+        .where(or(eq(notifications.userId, userId), eq(notifications.actorId, userId)));
+      await tx.delete(comments).where(eq(comments.authorId, userId));
+      await tx.delete(posts).where(eq(posts.authorId, userId));
+      await tx
+        .delete(reports)
+        .where(
+          or(
+            eq(reports.reporterId, userId),
+            and(eq(reports.targetType, 'user'), eq(reports.targetId, userId)),
+          ),
+        );
+      await tx.delete(auditLogs).where(eq(auditLogs.userId, userId));
+      await tx.delete(sessions).where(eq(sessions.userId, userId));
+      await tx.delete(oauthAccounts).where(eq(oauthAccounts.userId, userId));
+      await tx.delete(mediaObjects).where(eq(mediaObjects.userId, userId));
+      await tx.delete(users).where(eq(users.id, userId));
+      await tx.execute(sql`select set_config('app.allow_password', '', true)`);
+    }),
+  );
 
   for (const row of media) {
     try {

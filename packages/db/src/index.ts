@@ -3,7 +3,7 @@ import postgres from 'postgres';
 import * as schema from './schema.js';
 
 export function createSql(url: string) {
-  return postgres(url, { max: 12, idle_timeout: 20, connect_timeout: 8 });
+  return postgres(url, { max: 20, idle_timeout: 20, connect_timeout: 8 });
 }
 
 export function dbFromClient(client: postgres.Sql) {

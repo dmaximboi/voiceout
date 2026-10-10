@@ -1,5 +1,6 @@
 import { notifications, type Db } from '@voiceout/db';
 import { and, eq, sql } from 'drizzle-orm';
+import { withRlsOff } from './rls.js';
 
 export async function notify(
   db: Db,
@@ -22,6 +23,11 @@ export async function notify(
   },
 ) {
   if (input.userId === input.actorId && input.type !== 'account_warning') return;
+  // Dedupe reads the recipient's inbox, which RLS hides from the actor.
+  await withRlsOff(db, () => writeNotification(db, input));
+}
+
+async function writeNotification(db: Db, input: Parameters<typeof notify>[1]) {
   if (input.type === 'follow') {
     const [existing] = await db
       .select({ id: notifications.id })

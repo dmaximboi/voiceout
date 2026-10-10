@@ -23,13 +23,22 @@ function cookiesFrom(res: Response): string[] {
 
 function applyCookie(res: NextResponse, raw: string) {
   const cleaned = raw.replace(/;\s*Domain=[^;]*/gi, '');
-  const parts = cleaned.split(';').map((p) => p.trim()).filter(Boolean);
+  const parts = cleaned
+    .split(';')
+    .map((p) => p.trim())
+    .filter(Boolean);
   const first = parts[0];
   if (!first) return;
   const eq = first.indexOf('=');
   if (eq < 1) return;
   const name = first.slice(0, eq).trim();
-  const value = first.slice(eq + 1);
+  // Upstream already URL-encoded the value and cookies.set encodes again.
+  let value = first.slice(eq + 1);
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    /* keep raw */
+  }
   const opts: CookieOpts = { path: '/' };
   for (const part of parts.slice(1)) {
     const [rawKey, ...rest] = part.split('=');
@@ -58,7 +67,10 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     }
     const { path } = await ctx.params;
     if (path.some((p) => !p || p === '.' || p === '..' || p.includes('\\') || p.includes('\0'))) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404, headers: { 'cache-control': 'no-store' } });
+      return NextResponse.json(
+        { error: 'Not found' },
+        { status: 404, headers: { 'cache-control': 'no-store' } },
+      );
     }
     const incoming = new URL(req.url);
     const target = `${API}/${path.map(encodeURIComponent).join('/')}${incoming.search}`;
@@ -73,8 +85,15 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     if (range) headers.set('range', range);
     const idem = req.headers.get('idempotency-key');
     if (idem) headers.set('idempotency-key', idem);
+    const userAgent = req.headers.get('user-agent');
+    if (userAgent) headers.set('user-agent', userAgent.slice(0, 400));
     // Bachs (and similar) webhooks need signature headers intact.
-    for (const name of ['x-bachs-signature', 'x-bachs-timestamp', 'x-webhook-signature', 'x-webhook-timestamp']) {
+    for (const name of [
+      'x-bachs-signature',
+      'x-bachs-timestamp',
+      'x-webhook-signature',
+      'x-webhook-timestamp',
+    ]) {
       const value = req.headers.get(name);
       if (value) headers.set(name, value);
     }
@@ -115,7 +134,8 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     const out = new Headers();
     upstream.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
-      if (lower === 'transfer-encoding' || lower === 'content-encoding' || lower === 'set-cookie') return;
+      if (lower === 'transfer-encoding' || lower === 'content-encoding' || lower === 'set-cookie')
+        return;
       out.set(key, value);
     });
     if (!out.has('cache-control')) out.set('cache-control', 'no-store');
@@ -132,7 +152,10 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
     return response;
   } catch (err) {
     console.error(err);
-    return NextResponse.json({ error: 'Server error' }, { status: 502, headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json(
+      { error: 'Server error' },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
+    );
   }
 }
 

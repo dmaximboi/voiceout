@@ -4,6 +4,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { requireAuth, requireCsrf } from '../plugins/auth.js';
 import { clampLimit } from '../lib/page.js';
 import { toPublicUser } from '../lib/users.js';
+import { userPublicColumns } from '../lib/rls.js';
 import { z } from 'zod';
 
 export const notificationReadSchema = z
@@ -52,7 +53,7 @@ export async function notificationRoutes(app: FastifyInstance) {
       .limit(clampLimit((req.query as { limit?: string }).limit, 50, 50));
     const out = [];
     for (const n of rows) {
-      const [actor] = await app.db.select().from(users).where(eq(users.id, n.actorId)).limit(1);
+      const [actor] = await app.db.select(userPublicColumns).from(users).where(eq(users.id, n.actorId)).limit(1);
       if (!actor) continue;
       out.push({
         id: n.id,
@@ -80,7 +81,7 @@ export async function notificationRoutes(app: FastifyInstance) {
       const seen = new Set(out.map((n) => n.postId).filter(Boolean));
       for (const p of trendPosts) {
         if (p.authorId === viewer || seen.has(p.id)) continue;
-        const [actor] = await app.db.select().from(users).where(eq(users.id, p.authorId)).limit(1);
+        const [actor] = await app.db.select(userPublicColumns).from(users).where(eq(users.id, p.authorId)).limit(1);
         if (!actor) continue;
         out.unshift({
           id: `trend-${p.id}`,

@@ -55,6 +55,8 @@ export const SAMPLE_POSTS: PostCard[] = [
     status: 'published',
     categories: {},
     rankReasons: [],
+    shelf: null,
+    topic: null,
   },
   {
     id: 'sample-2',
@@ -79,6 +81,8 @@ export const SAMPLE_POSTS: PostCard[] = [
     status: 'published',
     categories: {},
     rankReasons: [],
+    shelf: null,
+    topic: null,
   },
   {
     id: 'sample-3',
@@ -103,5 +107,7 @@ export const SAMPLE_POSTS: PostCard[] = [
     status: 'published',
     categories: {},
     rankReasons: [],
+    shelf: null,
+    topic: null,
   },
 ];

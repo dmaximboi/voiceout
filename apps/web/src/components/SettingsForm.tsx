@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { api, ApiError, clearCsrf, uploadAvatar } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { formatCooldown, type PlanTier } from '@voiceout/shared';
+import { COUNTRIES, formatCooldown, type PlanTier } from '@voiceout/shared';
 import { Avatar } from '@/components/Avatar';
 import { LegalLinks } from '@/components/LegalLinks';
 import { PlanSubscribeSheet } from '@/components/PlanSubscribeSheet';
@@ -25,6 +25,8 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
   const [displayName, setDisplayName] = useState('');
   const [handle, setHandle] = useState('');
   const [bio, setBio] = useState('');
+  const [city, setCity] = useState('');
+  const [country, setCountry] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -59,6 +61,8 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
       setDisplayName(user.displayName);
       setHandle(user.handle);
       setBio(user.bio ?? '');
+      setCity(user.city ?? '');
+      setCountry(user.country ?? '');
     }
   }, [user]);
 
@@ -156,6 +160,8 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
           displayName,
           handle,
           bio,
+          city,
+          country,
           ...(handleChanging ? { verificationCode: nameCode } : {}),
         }),
       });
@@ -480,8 +486,33 @@ function SettingsFormInner({ compact = false }: { compact?: boolean }) {
             value={bio}
             onChange={(e) => setBio(e.target.value)}
             maxLength={160}
-            placeholder="Where you're from and the language you speak helps people near you find your voices"
+            placeholder="A short line about you"
           />
+        </label>
+        <label className="block text-sm font-medium">
+          City
+          <input
+            className="mt-1 w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base font-normal"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            maxLength={80}
+            placeholder="Lagos"
+          />
+        </label>
+        <label className="block text-sm font-medium">
+          Country
+          <select
+            className="mt-1 w-full min-h-11 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 text-base font-normal"
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+          >
+            <option value="">Select</option>
+            {COUNTRIES.map((row) => (
+              <option key={row.code} value={row.code}>
+                {row.name}
+              </option>
+            ))}
+          </select>
         </label>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         <button className="flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-white active:opacity-80" type="submit">

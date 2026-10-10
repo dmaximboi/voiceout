@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { FormEvent, Suspense, useEffect, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useRef, useState } from 'react';
 import { api, clearCsrf, uploadAvatar } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { safeNextPath } from '@/lib/paths';
@@ -33,9 +33,10 @@ function RegisterPageInner() {
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const stayForWelcome = useRef(false);
 
   useEffect(() => {
-    if (!loading && user) router.replace(next);
+    if (!loading && user && !stayForWelcome.current) router.replace(next);
   }, [user, loading, router, next]);
 
   async function onSubmit(e: FormEvent) {
@@ -51,6 +52,12 @@ function RegisterPageInner() {
         method: 'POST',
         body: JSON.stringify({ email, password, handle: handle.toLowerCase(), displayName }),
       });
+      stayForWelcome.current = true;
+      try {
+        sessionStorage.setItem('vo_need_welcome', '1');
+      } catch {
+        /* private mode */
+      }
       clearCsrf();
       applyUser(created.user);
       try {
@@ -68,7 +75,7 @@ function RegisterPageInner() {
       } catch {
         /* private mode */
       }
-      router.replace(next);
+      router.replace(next === '/' ? '/welcome' : `/welcome?next=${encodeURIComponent(next)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not register');
     } finally {
@@ -149,7 +156,18 @@ function RegisterPageInner() {
       <div className="mt-4">
         <OAuthButtons next={next} />
       </div>
-      <LegalLinks className="mt-4" />
+      <p className="mt-4 text-center text-xs text-[var(--muted)]">
+        By creating an account you agree to the{' '}
+        <Link href="/terms" className="underline-offset-2 hover:underline">
+          Terms
+        </Link>{' '}
+        and{' '}
+        <Link href="/privacy" className="underline-offset-2 hover:underline">
+          Privacy Policy
+        </Link>
+        .
+      </p>
+      <LegalLinks className="mt-3" />
       <p className="mt-3 text-center text-xs text-[var(--muted)]">A profile photo helps people recognize you.</p>
       <p className="mt-6 text-sm">
         Already have an account?{' '}

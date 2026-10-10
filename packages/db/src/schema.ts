@@ -84,6 +84,8 @@ export const users = pgTable(
     emailNonce: text('email_nonce'),
     lang: varchar('lang', { length: 8 }),
     region: varchar('region', { length: 8 }),
+    city: varchar('city', { length: 80 }),
+    country: varchar('country', { length: 8 }),
     ...timestamps,
   },
   (t) => [
@@ -229,6 +231,8 @@ export const posts = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     region: varchar('region', { length: 8 }),
+    shelf: varchar('shelf', { length: 24 }),
+    topic: varchar('topic', { length: 24 }),
     shareCode: varchar('share_code', { length: 12 }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

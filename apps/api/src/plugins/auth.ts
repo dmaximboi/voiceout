@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { oauthAccounts, sessions, users } from '@voiceout/db';
+import { userSelfColumns } from '../lib/rls.js';
 import { eq, sql } from 'drizzle-orm';
 import { isOpenRoute } from '../lib/acl.js';
 import { assertCsrf, readCookies } from '../lib/cookies.js';
@@ -29,10 +30,6 @@ export async function authPlugin(app: FastifyInstance) {
       throw err;
     }
 
-    await app.db.execute(sql`select set_config('app.rls', 'on', true)`);
-    await app.db.execute(sql`select set_config('app.user_id', '', true)`);
-    await app.db.execute(sql`select set_config('app.session_id', '', true)`);
-
     if (!access) {
       req.authUser = null;
     } else {
@@ -41,7 +38,11 @@ export async function authPlugin(app: FastifyInstance) {
         req.authUser = null;
       } else {
         await app.db.execute(sql`select set_config('app.session_id', ${payload.sid}, true)`);
-        const [session] = await app.db.select().from(sessions).where(eq(sessions.id, payload.sid)).limit(1);
+        const [session] = await app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, payload.sid))
+          .limit(1);
         if (!session || session.userId !== payload.sub || session.expiresAt < new Date()) {
           const [suspended] = await app.db
             .select({ suspendedAt: users.suspendedAt })
@@ -54,7 +55,11 @@ export async function authPlugin(app: FastifyInstance) {
           req.authUser = null;
         } else {
           await app.db.execute(sql`select set_config('app.user_id', ${session.userId}, true)`);
-          const [row] = await app.db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+          const [row] = await app.db
+            .select(userSelfColumns)
+            .from(users)
+            .where(eq(users.id, session.userId))
+            .limit(1);
           const user = row ? await ensureBootstrapAdmin(app.db, app.env, row) : null;
           if (user?.suspendedAt) {
             throw httpError(403, 'Account suspended', { code: 'ACCOUNT_SUSPENDED' });
@@ -76,7 +81,10 @@ export async function authPlugin(app: FastifyInstance) {
               planTier: activePlanTier(user.planTier, user.studioUntil),
               isStudio: Boolean(activePlanTier(user.planTier, user.studioUntil)),
             };
-            if (session.lastSeenAt && Date.now() - new Date(session.lastSeenAt).getTime() > LAST_SEEN_MS) {
+            if (
+              session.lastSeenAt &&
+              Date.now() - new Date(session.lastSeenAt).getTime() > LAST_SEEN_MS
+            ) {
               await app.db
                 .update(sessions)
                 .set({ lastSeenAt: new Date() })
@@ -152,21 +160,25 @@ export async function requireAdministrator(app: FastifyInstance, req: FastifyReq
 
 const ADMIN_STEPUP_TTL = 30 * 60;
 
+/** Per session, so a stolen admin session cannot ride on the owner's confirmation. */
+function stepUpKey(sessionId: string) {
+  return `vo:admin-stepup:${sessionId}`;
+}
+
 export async function requireAdminStepUp(app: FastifyInstance, req: FastifyRequest) {
-  const key = `vo:admin-stepup:${req.authUser!.id}`;
-  const ok = await app.redis.get(key);
+  const ok = await app.redis.get(stepUpKey(req.authUser!.sid));
   if (!ok) {
     throw httpError(403, 'Confirm your identity to continue', { code: 'ADMIN_STEPUP_REQUIRED' });
   }
 }
 
-export async function grantAdminStepUp(app: FastifyInstance, userId: string) {
-  await app.redis.set(`vo:admin-stepup:${userId}`, '1', 'EX', ADMIN_STEPUP_TTL);
+export async function grantAdminStepUp(app: FastifyInstance, sessionId: string) {
+  await app.redis.set(stepUpKey(sessionId), '1', 'EX', ADMIN_STEPUP_TTL);
   return ADMIN_STEPUP_TTL;
 }
 
-export async function adminStepUpRemaining(app: FastifyInstance, userId: string) {
-  const ttl = await app.redis.ttl(`vo:admin-stepup:${userId}`);
+export async function adminStepUpRemaining(app: FastifyInstance, sessionId: string) {
+  const ttl = await app.redis.ttl(stepUpKey(sessionId));
   return ttl > 0 ? ttl : 0;
 }
 
@@ -180,6 +192,8 @@ async function assertAdminDevice(app: FastifyInstance, req: FastifyRequest) {
   if (!expected) return;
   const cookie = readCookies(req).device;
   if (!cookie || sha256(cookie) !== expected) {
-    throw httpError(403, 'This device is not registered for that account', { code: 'DEVICE_REQUIRED' });
+    throw httpError(403, 'This device is not registered for that account', {
+      code: 'DEVICE_REQUIRED',
+    });
   }
 }

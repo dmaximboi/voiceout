@@ -47,11 +47,14 @@ if (!before.length) {
   await sql.end();
   process.exit(2);
 }
-const after = await sql`
-  update users
-  set role = 'admin', updated_at = now()
-  where lower(email) = lower(${email})
-  returning id, email, handle, role
-`;
+const after = await sql.begin(async (tx) => {
+  await tx`select set_config('app.rls', 'off', true)`;
+  return tx`
+    update users
+    set role = 'admin', updated_at = now()
+    where lower(email) = lower(${email})
+    returning id, email, handle, role
+  `;
+});
 console.log('after', after);
 await sql.end();

@@ -39,11 +39,11 @@ const nextConfig: NextConfig = {
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Permissions-Policy', value: 'camera=(), geolocation=(), microphone=(self)' },
+          { key: 'Permissions-Policy', value: 'camera=(), geolocation=(self), microphone=(self)' },
           {
             key: 'Content-Security-Policy',
             value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://telegram.org https://t.me; media-src 'self' blob:; connect-src 'self' blob: ws: wss: https://oauth.telegram.org; font-src 'self' data:; worker-src 'self' blob:; frame-src https://oauth.telegram.org https://telegram.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://telegram.org https://t.me; media-src 'self' blob:; connect-src 'self' blob: ws: wss: https://oauth.telegram.org https://cloudflareinsights.com https://static.cloudflareinsights.com; font-src 'self' data:; worker-src 'self' blob:; frame-src https://oauth.telegram.org https://telegram.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
           },
         ],
       },

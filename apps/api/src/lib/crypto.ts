@@ -14,6 +14,16 @@ export async function hashPassword(plain: string): Promise<string> {
   });
 }
 
+/** Constant-time dummy so a missing account takes the same path as a bad password. */
+const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=19456,t=3,p=1$A6evOJErAMIwL9kDni1Odw$VM3F1zbbqkXn2tOJM7gPFujuEkgHcdr0CuuqvQzrpxI';
+
+export async function verifyPasswordOrDummy(hash: string | null | undefined, plain: string): Promise<boolean> {
+  if (hash) return verifyPassword(hash, plain);
+  await verifyPassword(DUMMY_PASSWORD_HASH, plain);
+  return false;
+}
+
 export async function verifyPassword(hash: string, plain: string): Promise<boolean> {
   try {
     return await argon2Verify({ password: plain, hash });

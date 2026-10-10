@@ -21,6 +21,7 @@ import {
   verifyBachsSignature,
 } from '../lib/bachs.js';
 import { randomToken } from '../lib/crypto.js';
+import { withRlsOff } from '../lib/rls.js';
 import { checkoutReturnOrigin } from '../lib/origins.js';
 import { z } from 'zod';
 
@@ -42,8 +43,7 @@ async function grantPlan(
       ? current.studioUntil.getTime()
       : Date.now();
   const until = new Date(base + PLAN_DAYS * 24 * 60 * 60 * 1000);
-  const nextTier =
-    active && comparePlanTier(active, tier) > 0 ? active : tier;
+  const nextTier = active && comparePlanTier(active, tier) > 0 ? active : tier;
   await app.db
     .update(users)
     .set({ studioUntil: until, planTier: nextTier, updatedAt: new Date() })
@@ -148,12 +148,14 @@ export async function billingRoutes(app: FastifyInstance) {
     { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } },
     async (req, reply) => {
       req.body = { tier: 'basic' };
-      return app.inject({
-        method: 'POST',
-        url: '/billing/plans/checkout',
-        headers: { ...req.headers, 'content-type': 'application/json' },
-        payload: JSON.stringify({ tier: 'basic' }),
-      }).then((res) => reply.code(res.statusCode).send(JSON.parse(res.body)));
+      return app
+        .inject({
+          method: 'POST',
+          url: '/billing/plans/checkout',
+          headers: { ...req.headers, 'content-type': 'application/json' },
+          payload: JSON.stringify({ tier: 'basic' }),
+        })
+        .then((res) => reply.code(res.statusCode).send(JSON.parse(res.body)));
     },
   );
 
@@ -196,7 +198,10 @@ export async function billingRoutes(app: FastifyInstance) {
         .select()
         .from(billingCheckouts)
         .where(
-          and(eq(billingCheckouts.checkoutId, checkoutId), eq(billingCheckouts.userId, req.authUser!.id)),
+          and(
+            eq(billingCheckouts.checkoutId, checkoutId),
+            eq(billingCheckouts.userId, req.authUser!.id),
+          ),
         )
         .limit(1);
       if (!row) return reply.code(404).send({ error: 'Checkout not found' });
@@ -218,10 +223,14 @@ export async function billingRoutes(app: FastifyInstance) {
         };
       }
 
-      await app.db
+      const [claimed] = await app.db
         .update(billingCheckouts)
         .set({ status: 'paid', updatedAt: new Date() })
-        .where(eq(billingCheckouts.id, row.id));
+        .where(and(eq(billingCheckouts.id, row.id), eq(billingCheckouts.status, 'open')))
+        .returning({ id: billingCheckouts.id });
+      if (!claimed) {
+        return { ok: true, planTier: req.authUser!.planTier, already: true };
+      }
       const granted = await grantPlan(app, req, req.authUser!.id, expectedTier, checkoutId);
       return {
         ok: true,
@@ -276,43 +285,52 @@ export async function billingRoutes(app: FastifyInstance) {
             metadata?: { user_id?: string; purpose?: string; plan_tier?: string };
           };
         };
-        if (!event.id || !event.type) return reply.code(400).send({ error: 'Bad event' });
-        const [seen] = await app.db
-          .select({ eventId: billingWebhookEvents.eventId })
-          .from(billingWebhookEvents)
-          .where(eq(billingWebhookEvents.eventId, event.id))
-          .limit(1);
-        if (seen) return { ok: true, duplicate: true };
-        await app.db.insert(billingWebhookEvents).values({ eventId: event.id });
+        const eventId = event.id;
+        if (!eventId || !event.type) return reply.code(400).send({ error: 'Bad event' });
+        // Signed by Bachs; no signed-in user, so it acts as the service.
+        return withRlsOff(app.db, async () => {
+          const [seen] = await app.db
+            .select({ eventId: billingWebhookEvents.eventId })
+            .from(billingWebhookEvents)
+            .where(eq(billingWebhookEvents.eventId, eventId))
+            .limit(1);
+          if (seen) return { ok: true, duplicate: true };
+          await app.db.insert(billingWebhookEvents).values({ eventId });
 
-        if (event.type === 'collection.succeeded' || event.type === 'checkout.completed') {
-          const checkoutId = event.data?.checkout_id;
-          let userId = event.data?.metadata?.user_id;
-          let tier: PlanTier | null = null;
-          if (checkoutId) {
-            const [row] = await app.db
-              .select()
-              .from(billingCheckouts)
-              .where(eq(billingCheckouts.checkoutId, checkoutId))
-              .limit(1);
-            if (row) {
-              userId = row.userId;
-              tier = tierFromPurpose(row.purpose);
-              await app.db
-                .update(billingCheckouts)
-                .set({ status: 'paid', updatedAt: new Date() })
-                .where(and(eq(billingCheckouts.id, row.id), eq(billingCheckouts.status, 'open')));
+          if (event.type === 'collection.succeeded' || event.type === 'checkout.completed') {
+            const checkoutId = event.data?.checkout_id;
+            let userId = event.data?.metadata?.user_id;
+            let tier: PlanTier | null = null;
+            if (checkoutId) {
+              const [row] = await app.db
+                .select()
+                .from(billingCheckouts)
+                .where(eq(billingCheckouts.checkoutId, checkoutId))
+                .limit(1);
+              if (row) {
+                // Confirm and both webhook event types race for the same checkout; only the
+                // request that flips it from open grants the plan.
+                const [claimed] = await app.db
+                  .update(billingCheckouts)
+                  .set({ status: 'paid', updatedAt: new Date() })
+                  .where(and(eq(billingCheckouts.id, row.id), eq(billingCheckouts.status, 'open')))
+                  .returning({ id: billingCheckouts.id });
+                if (!claimed) return { ok: true, duplicate: true };
+                userId = row.userId;
+                tier = tierFromPurpose(row.purpose);
+              }
+            }
+            if (!tier && event.data?.metadata?.plan_tier) {
+              const rawTier = event.data.metadata.plan_tier;
+              if (rawTier === 'basic' || rawTier === 'verified' || rawTier === 'gold')
+                tier = rawTier;
+            }
+            if (userId && tier) {
+              await grantPlan(app, req, userId, tier, checkoutId);
             }
           }
-          if (!tier && event.data?.metadata?.plan_tier) {
-            const rawTier = event.data.metadata.plan_tier;
-            if (rawTier === 'basic' || rawTier === 'verified' || rawTier === 'gold') tier = rawTier;
-          }
-          if (userId && tier) {
-            await grantPlan(app, req, userId, tier, checkoutId);
-          }
-        }
-        return { ok: true };
+          return { ok: true };
+        });
       },
     );
   });

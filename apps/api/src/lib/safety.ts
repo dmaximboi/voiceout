@@ -11,6 +11,7 @@ import {
 import { and, countDistinct, eq, isNull, sql } from 'drizzle-orm';
 import type { ReportSubmission } from '@voiceout/shared';
 import { httpError } from './http.js';
+import { withRlsOff } from './rls.js';
 
 export type ResolvedReportTarget = {
   targetType: ReportSubmission['targetType'];
@@ -60,6 +61,11 @@ export async function resolveReportTarget(
 }
 
 export async function submitReport(db: Db, reporterId: string, body: ReportSubmission) {
+  // Thresholds count other people's reports and act on the reported account.
+  return withRlsOff(db, () => fileReport(db, reporterId, body));
+}
+
+async function fileReport(db: Db, reporterId: string, body: ReportSubmission) {
   return db.transaction(async (tx) => {
     const target = await resolveReportTarget(tx, body.targetType, body.targetId);
     if (!target) throw httpError(404, 'Report target not found');
@@ -105,7 +111,11 @@ export async function submitReport(db: Db, reporterId: string, body: ReportSubmi
     if (threshold.warn) {
       const [warned] = await tx
         .update(users)
-        .set({ warningCount: sql`${users.warningCount} + 1`, warnedAt: new Date(), updatedAt: new Date() })
+        .set({
+          warningCount: sql`${users.warningCount} + 1`,
+          warnedAt: new Date(),
+          updatedAt: new Date(),
+        })
         .where(and(eq(users.id, target.subjectUserId), isNull(users.warnedAt)))
         .returning({ id: users.id });
       if (warned) {
@@ -113,7 +123,8 @@ export async function submitReport(db: Db, reporterId: string, body: ReportSubmi
           userId: target.subjectUserId,
           actorId: target.subjectUserId,
           type: 'account_warning',
-          message: 'Your account has received a moderation warning. Two more unique reports may suspend it.',
+          message:
+            'Your account has received a moderation warning. Two more unique reports may suspend it.',
         });
       }
     }
